@@ -11,7 +11,7 @@ html,body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 "Noto San
 button{font:inherit;color:inherit;cursor:pointer}
 input,select,textarea{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;width:100%}
 #app{max-width:860px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column}
-.top{position:sticky;top:0;z-index:5;background:linear-gradient(180deg,#141209,#0f0d09);border-bottom:1px solid var(--line);padding:8px 12px 0}
+.top{position:sticky;top:0;z-index:5;background:linear-gradient(180deg,#141209,#0f0d09);border-bottom:1px solid var(--line);padding:6px 12px 0}
 .top h1{margin:0;font-size:16px;color:var(--gold);letter-spacing:.1em;display:flex;align-items:center;gap:8px}
 .top h1 small{font-size:11px;color:var(--tx2);letter-spacing:0;font-weight:normal;margin-left:auto}
 .strip{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:var(--tx2);padding:4px 0}
@@ -78,6 +78,29 @@ main{flex:1;padding:12px}
 .ms.done .dot{background:#3d5a2e;border-color:#3d5a2e}.ms.cur .dot{border-color:var(--gold);color:var(--gold)}
 textarea{min-height:60px;resize:vertical}
 label.f{display:block;margin:8px 0 3px;font-size:12px;color:var(--tx2)}
+
+.mini-needs{display:flex;flex-wrap:wrap;gap:4px;padding:2px 0 6px}
+.mn{position:relative;display:inline-flex;align-items:center;gap:3px;background:#211d15;border:1px solid var(--line);border-radius:6px;padding:1px 6px 1px 4px;font-size:11px;overflow:hidden;min-width:52px}
+.mn i{position:absolute;left:0;bottom:0;height:2px;background:var(--grn)}.mn.mid i{background:var(--org)}.mn.low i{background:var(--red)}.mn.low{border-color:#6b2f24}
+.mn b{color:var(--gold);font-weight:normal}.mn em{font-style:normal;margin-left:auto;font-variant-numeric:tabular-nums}
+.story .slog{max-height:calc(100vh - 290px);min-height:240px;overflow-y:auto;padding-right:4px}
+.story .ai{padding:6px 0 10px;border-bottom:1px dashed #2a251b;opacity:.6}.story .ai.cur{opacity:1}
+.story .me{margin:8px 0 8px auto;max-width:85%;width:fit-content;background:#2b2412;border:1px solid var(--gold2);border-radius:10px 10px 2px 10px;padding:6px 10px;font-size:13px;white-space:pre-wrap}
+.story .me.sys{background:#1d211a;border-color:#3d5a2e;color:#b8dca0;font-size:12px}
+.s-st{font-size:12px;color:var(--tx2);margin:4px 0}
+.s-p{margin:6px 0;line-height:1.75}
+.s-d{margin:6px 0;line-height:1.75;color:#f0d999;padding-left:8px;border-left:2px solid var(--gold2)}
+.s-col{font-size:12px;color:var(--tx2);margin-top:6px;background:var(--bg);border-radius:6px;padding:4px 8px}
+.s-btns{display:grid;gap:6px;margin-top:10px}
+.s-btns .btn{text-align:left;min-height:38px;padding:8px 10px}
+.say{display:flex;gap:6px;margin-top:8px;align-items:stretch}
+.say textarea{flex:1;min-height:44px;max-height:120px}
+.say .btn{min-width:64px}
+.wide{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(300px,1fr);gap:12px;align-items:start}
+.wide .sl{position:sticky;top:96px}
+.wide .story .slog{max-height:calc(100vh - 260px)}
+.wide .grid3{grid-template-columns:repeat(3,1fr)}
+@media (min-width:760px){#app{max-width:1200px}}
 @media (max-width:480px){.grid3{grid-template-columns:1fr 1fr}}
 </style>
 </head>
@@ -1475,7 +1498,7 @@ G.MREngine = { createEngine: createEngine };
 /* 末日求生者 求生日誌 介面 v1.0 */
 (function () {
 'use strict';
-var VER = '1.0.0';
+var VER = '1.1.0';
 var KS = LTStore.create('mori', {});
 var E = MREngine.createEngine(MR_DATA);
 var EMB = window.parent !== window;
@@ -1487,7 +1510,8 @@ KS.ready.then(boot);
 
 /* ================= 狀態 ================= */
 var M = null, W = null, C = null;
-var view = 'boot', tab = 'status', busy = false, conv = null, lastSent = '', toastT = 0, mapSel = null, storeErr = null;
+var storyLog = [], draft = '', sayFocus = false, scrollStory = true, wideMode = false;
+var view = 'boot', tab = 'story', busy = false, conv = null, lastSent = '', toastT = 0, mapSel = null, storeErr = null;
 var wz = null, modal = null;
 var BG_LIST = [
   ['zombie', '🧟 喪屍末日', '病毒爆發，城市淪陷。被咬傷 24 小時內不治療就會變成它們。'],
@@ -1520,7 +1544,8 @@ function armText() { var p = W.pending.length ? W.pending.join('\n') + '\n' : ''
 function arm() { if (W && C && C.alive) post({ t: 'arm', obj: armText(), tail: '' }); else post({ t: 'arm', off: true }); hint(); }
 function sendToAI(text) {
   lastSent = text; save();
-  if (EMB) { post({ t: 'fill', text: text, send: true, keep: false }); busy = true; }
+  storyPush({ k: 'me', t: text.split('\n')[0], sys: true });
+  if (EMB) { post({ t: 'fill', text: text, send: true, keep: true }); busy = true; render(); }
   else showModal({ title: '要送給 AI 的訊息', body: '<p class="muted">（獨立開啟的面板無法直接送出，請複製貼到聊天框）</p><textarea style="min-height:220px" readonly>' + esc(text) + '</textarea>', buttons: [['複製', function () { try { navigator.clipboard.writeText(text); toast('已複製'); } catch (e) {} closeModal(); }], ['關閉', closeModal]] });
 }
 function onHost(e) {
@@ -1530,6 +1555,62 @@ function onHost(e) {
   else if (d.t === 'consumed') { if (W) { W.pending = []; save(); arm(); } }
   else if (d.t === 'conv') onConv(d.id, d.u);
   else if (d.t === 'events') onEvents(d.id, d.text);
+  else if (d.t === 'story') onStory(d);
+}
+
+/* ================= 劇情頁 ================= */
+function storyKey() { return W ? 'st:' + W.worldId : null; }
+function storyLoad() { storyLog = (storyKey() && J(storyKey())) || []; }
+function storySave() { if (storyKey()) KS.set(storyKey(), JSON.stringify(storyLog.slice(-12))); }
+function storyPush(x) { storyLog.push(x); if (storyLog.length > 12) storyLog = storyLog.slice(-12); scrollStory = true; storySave(); }
+function onStory(d) {
+  if (!d.blocks || !d.blocks.length) return;
+  var last = storyLog.filter(function (x) { return x.k === 'ai'; }).slice(-1)[0];
+  if (last && last.id === d.id) return;
+  if (last && last.sig && JSON.stringify(last.blocks) === JSON.stringify(d.blocks)) return;
+  storyPush({ k: 'ai', id: d.id, blocks: d.blocks, sig: 1 });
+  if (!d.busy) busy = false;
+  render();
+}
+function sendFree(text) {
+  text = String(text || '').trim(); if (!text) return;
+  if (busy && EMB) { toast('AI 正在回覆，稍等一下'); return; }
+  if (!C || !C.alive) { toast('請先建立角色'); return; }
+  storyPush({ k: 'me', t: text });
+  draft = '';
+  if (EMB) { post({ t: 'fill', text: text, send: true, keep: true }); busy = true; }
+  else { sendToAI(text + armText()); return; }
+  render();
+}
+function tStory() {
+  var h = '<div class="card story"><h3>📖 劇情<span>' + (busy && EMB ? '⏳ AI 回覆中…' : '') + '</span></h3><div class="slog" id="slog">';
+  if (!storyLog.length) h += '<p class="muted">AI 的回覆會顯示在這裡。也可以直接在下方輸入你想做的事。</p>';
+  var lastAi = -1; storyLog.forEach(function (x, i) { if (x.k === 'ai') lastAi = i; });
+  storyLog.forEach(function (x, i) {
+    if (x.k === 'me') { h += '<div class="me' + (x.sys ? ' sys' : '') + '">' + esc(x.t) + '</div>'; return; }
+    var btns = [];
+    h += '<div class="ai' + (i === lastAi ? ' cur' : '') + '">';
+    x.blocks.forEach(function (b) {
+      if (b.k === 'st') h += '<div class="s-st">' + esc(b.t) + '</div>';
+      else if (b.k === 'd') h += '<p class="s-d">' + esc(b.t).replace(/\n/g, '<br>') + '</p>';
+      else if (b.k === 'p') h += '<p class="s-p">' + esc(b.t).replace(/\n/g, '<br>') + '</p>';
+      else if (b.k === 'hr') h += '<hr>';
+      else if (b.k === 'col') h += '<details class="s-col"><summary>' + esc(b.h || '詳情') + '</summary>' + esc(b.t).replace(/\n/g, '<br>') + '</details>';
+      else if (b.k === 'btn') btns.push(b);
+    });
+    if (btns.length && i === lastAi) h += '<div class="s-btns">' + btns.map(function (b) { return '<button class="btn" data-a="btnsend" data-v="' + esc(b.s) + '"' + (busy && EMB ? ' disabled' : '') + '>' + esc(b.t) + '</button>'; }).join('') + '</div>';
+    h += '</div>';
+  });
+  h += '</div><div class="say"><textarea id="say" rows="2" placeholder="輸入你想做的事（Enter 送出，Ctrl+Enter 換行）"' + (busy && EMB ? ' disabled' : '') + '></textarea><button class="btn pri" data-a="say"' + (busy && EMB ? ' disabled' : '') + '>送出</button></div></div>';
+  return h;
+}
+function miniNeeds() {
+  var n = C.needs, S = C.special, items = [['飢', n.hunger, 100], ['渴', n.thirst, 100], ['耐', n.stamina, E.stMax(C)], ['睡', n.sleep, 100], ['健', n.health, E.hpMax(C)], ['精', n.mind, 100]];
+  if (W.bg === 'space') items.push(['氧', S.oxygen, 100]);
+  if (W.bg === 'wasteland') items.push(['輻', 100 - S.radiation, 100, Math.round(S.radiation)]);
+  if (W.bg === 'zombie' && S.infection != null) items.push(['感', S.infection, 24, Math.ceil(S.infection) + 'h']);
+  if (W.bg === 'medieval' && S.plague != null) items.push(['疫', 100 - S.plague, 100, Math.round(S.plague)]);
+  return '<div class="mini-needs">' + items.map(function (x) { var p = Math.max(0, Math.min(100, x[1] / x[2] * 100)), c = p < 30 ? 'low' : p < 55 ? 'mid' : ''; return '<span class="mn ' + c + '"><b>' + x[0] + '</b><i style="width:' + p + '%"></i><em>' + (x[3] != null ? x[3] : Math.round(x[1])) + '</em></span>'; }).join('') + (C.status.length ? '<span class="mn low"><b>⚠</b><em>' + C.status.map(function (st) { return E.STATUS_NAME[st.id]; }).join('・') + '</em></span>' : '') + '</div>';
 }
 
 /* ================= 開機 ================= */
@@ -1538,7 +1619,7 @@ function boot() {
   window.addEventListener('message', onHost);
   M = J('meta') || E.newMeta();
   var cur = KS.get('cur');
-  if (cur && loadWorld(cur)) view = C ? 'game' : 'dead';
+  if (cur && loadWorld(cur)) { view = C ? 'game' : 'dead'; storyLoad(); }
   else view = 'wizard';
   if (view === 'wizard') startWizard('new');
   if (view === 'dead') startWizard('next');
@@ -1546,6 +1627,10 @@ function boot() {
   document.addEventListener('click', onClick);
   document.addEventListener('change', onChange);
   document.addEventListener('input', onInput);
+  document.addEventListener('keydown', onKey);
+  document.addEventListener('focusin', function (e) { if (e.target.id === 'say') sayFocus = true; });
+  document.addEventListener('focusout', function (e) { if (e.target.id === 'say') sayFocus = false; });
+  window.addEventListener('resize', function () { var w = innerWidth >= 760; if (w !== wideMode) render(); });
   window.__mr = { E: E, KS: KS, state: function () { return { M: M, W: W, C: C, view: view, busy: busy }; }, set: function (o) { if (o.W) W = o.W; if (o.C) C = o.C; render(); } };
   post({ t: 'hello', v: VER });
   arm();
@@ -1558,7 +1643,7 @@ function onConv(id, u) {
   conv = id;
   var bound = KS.get('conv:' + id);
   if (bound) {
-    if (!W || W.worldId !== bound) { save(); if (loadWorld(bound)) { view = C ? 'game' : 'wizard'; if (!C) startWizard('next'); toast('已載入這個對話的世界'); } }
+    if (!W || W.worldId !== bound) { save(); if (loadWorld(bound)) { storyLoad(); view = C ? 'game' : 'wizard'; if (!C) startWizard('next'); toast('已載入這個對話的世界'); } }
     render(); arm(); return;
   }
   if (W && C && C.alive) {
@@ -1666,7 +1751,7 @@ function finishDeath(cause, ctx) {
   showModal({
     title: '💀 ' + esc(name) + ' 死了',
     body: '<p>死因：<b>' + esc(E.DEATH_NAME[cause]) + '</b>｜存活 <b>' + r.days + '</b> 天｜擊殺 ' + deadC.kills + '</p><p class="muted">遺骸留在' + esc(E.pack(W.bg)._reg.get(deadC.location).name) + '，帶著一半的物品。世界過去了 ' + r.skip + ' 天。</p>' + (r.newAch.length ? '<p>🏅 ' + r.newAch.map(function (a) { return esc(a.name); }).join('、') + '</p>' : ''),
-    buttons: [['建立下一位倖存者', function () { closeModal(); tab = 'status'; render(); }]]
+    buttons: [['建立下一位倖存者', function () { closeModal(); tab = 'story'; render(); }]]
   });
   post({ t: 'want', open: true });
   render(); arm();
@@ -1709,7 +1794,7 @@ function createFromWizard() {
   var prof = { name: wz.profile.name.trim().slice(0, 12), gender: wz.profile.gender, age: parseInt(wz.profile.age, 10) || null, look: wz.profile.look.trim().slice(0, 80) };
   if (prof.age && prof.age < 18) { toast('角色必須是成年人'); if (isNew) W = null; return; }
   C = E.newChar(W, M, prof, wz.job, wz.traits.slice());
-  view = 'game'; tab = 'status';
+  view = 'game'; tab = 'story'; if (isNew) { storyLog = []; storySave(); }
   bindConv();
   var p = E.pack(W.bg), reg = p._reg.get(C.location), j = E.job(C.job);
   var tr = C.traits.map(function (t) { return E.trait(t.id).name + (t.pick ? '(' + t.pick + ')' : ''); }).join('、') || '無';
@@ -1755,6 +1840,8 @@ function onClick(e) {
   if (a === 'modalbg') { if (e.target === el && modal && !modal.lock) closeModal(); return; }
   if (a === 'tab') { tab = v; render(); return; }
   if (a === 'min') { post({ t: 'min' }); return; }
+  if (a === 'say') { var ta = document.getElementById('say'); sendFree(ta ? ta.value : draft); return; }
+  if (a === 'btnsend') { sendFree(v); return; }
   /* 精靈 */
   if (a === 'wz-bg') { wz.bg = v; wz.job = null; wz.step = 2; render(); return; }
   if (a === 'wz-nsfw') { wz.nsfw = v; wz.step = 3; render(); return; }
@@ -1794,7 +1881,12 @@ function onChange(e) {
   if (el.dataset.pick && wz) { var t = wz.traits.filter(function (x) { return x.id === el.dataset.pick; })[0]; if (t) t.pick = el.value; render(); }
   if (el.dataset.f && wz) { wz.profile[el.dataset.f] = el.value; if (el.tagName === 'SELECT') render(); }
 }
-function onInput(e) { var el = e.target; if (el.dataset.f && wz) wz.profile[el.dataset.f] = el.value; }
+function onInput(e) { var el = e.target; if (el.id === 'say') { draft = el.value; return; } if (el.dataset.f && wz) wz.profile[el.dataset.f] = el.value; }
+function onKey(e) {
+  if (e.target.id !== 'say' || e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) { return; }
+  e.preventDefault(); sendFree(e.target.value);
+}
 function exportSave() {
   var data = JSON.stringify({ game: 'mori', ver: VER, meta: M, world: W, char: C }, null, 1);
   var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([data], { type: 'application/json' })); a.download = 'mori_' + (W ? W.bg + '_day' + E.dayOf(W.t) : 'meta') + '.json'; a.click();
@@ -1813,25 +1905,38 @@ function toast(s) {
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 function render() {
   var app = document.getElementById('app'); if (!app) return;
+  wideMode = innerWidth >= 760;
+  var sl0 = document.getElementById('slog'); if (sl0 && sl0.scrollHeight - sl0.scrollTop - sl0.clientHeight < 40) scrollStory = true;
   var h = '';
   if (storeErr || KS.mode === 'memory') h += '<div class="banner">' + esc(storeErr || '瀏覽器不允許存檔，關掉頁面就會遺失進度，請記得匯出 JSON') + '</div>';
   h += top();
-  if (busy && EMB) h += '<div class="busy">⏳ AI 回覆中……完成後再進行下一個行動</div>';
+  if (busy && EMB && !(view === 'game' && (wideMode || tab === 'story'))) h += '<div class="busy">⏳ AI 回覆中……完成後再進行下一個行動</div>';
   h += '<main>';
   if (view === 'wizard' || view === 'dead') h += wizard();
-  else if (view === 'game' && C) h += ({ status: tStatus, act: tAct, inv: tInv, map: tMap, npc: tNpc, goal: tGoal, rec: tRec }[tab] || tStatus)();
+  else if (view === 'game' && C) {
+    var TB = { story: tStory, status: tStatus, act: tAct, inv: tInv, map: tMap, npc: tNpc, goal: tGoal, rec: tRec };
+    if (wideMode) h += '<div class="wide"><section class="sl">' + tStory() + '</section><section class="sr">' + (TB[tab === 'story' ? 'act' : tab] || tAct)() + '</section></div>';
+    else h += (TB[tab] || tStory)();
+  }
   h += '</main><div class="foot">求生日誌 v' + VER + '・引擎 ' + E.version + '・lt-store ' + LTStore.version + '・存檔：' + (KS.mode === 'idb' ? 'IndexedDB' : KS.mode) + '<br>原作：@肉包《末日求生者》</div>';
   h += '<input type="file" id="imp" accept=".json" style="display:none">';
   if (modal) h += '<div class="modal" data-a="modalbg"><div class="box"><h2>' + modal.title + '</h2>' + modal.body + '<div class="grid2" style="margin-top:12px">' + modal.buttons.map(function (b, i) { return '<button class="btn' + (i === 0 ? ' pri' : '') + '" data-a="modal" data-v="' + i + '">' + esc(b[0]) + '</button>'; }).join('') + '</div></div></div>';
+  var hadFocus = sayFocus;
   app.innerHTML = h;
+  var ta = document.getElementById('say');
+  if (ta) { ta.value = draft; if (hadFocus && !ta.disabled) { ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length; } }
+  var sl = document.getElementById('slog');
+  if (sl && scrollStory) { sl.scrollTop = sl.scrollHeight; scrollStory = false; }
 }
 function top() {
-  var h = '<div class="top"><h1>📓 求生日誌' + (EMB ? '<button class="mini" data-a="min" style="margin-left:auto">回聊天</button>' : '<small>獨立模式</small>') + '</h1>';
+  var h = '<div class="top">' + (EMB ? '' : '<h1>📓 求生日誌<small>獨立模式</small></h1>');
   if (W && C && view === 'game') {
     var se = E.season(W);
     h += '<div class="strip"><b>' + esc(C.profile.name) + '</b><span>' + E.clockStr(W.t) + '・' + E.period(W.t) + '</span><span>' + esc(E.weatherName(W)) + ' ' + E.ambient(W, C) + '°C' + (se ? '・' + E.SEASON_NAME[se] : '') + '</span><span>📍' + esc(E.pack(W.bg)._reg.get(C.location).name) + '</span></div>';
-    var tabs = [['status', '狀態'], ['act', '行動'], ['inv', '物品'], ['map', '地圖'], ['npc', '人物'], ['goal', '終局'], ['rec', '紀錄']];
-    h += '<div class="tabs">' + tabs.map(function (t) { return '<button class="tab' + (tab === t[0] ? ' on' : '') + '" data-a="tab" data-v="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div>';
+    h += miniNeeds();
+    var tabs = (wideMode ? [] : [['story', '劇情']]).concat([['status', '狀態'], ['act', '行動'], ['inv', '物品'], ['map', '地圖'], ['npc', '人物'], ['goal', '終局'], ['rec', '紀錄']]);
+    var curTab = wideMode && tab === 'story' ? 'act' : tab;
+    h += '<div class="tabs">' + tabs.map(function (t) { return '<button class="tab' + (curTab === t[0] ? ' on' : '') + '" data-a="tab" data-v="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div>';
   }
   return h + '</div>';
 }
