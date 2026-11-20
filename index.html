@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>求生日誌｜末日求生者</title>
 <style>
+*{scrollbar-color:#4a3f2c #14120e;scrollbar-width:thin}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:#14120e}::-webkit-scrollbar-thumb{background:#4a3f2c;border-radius:4px}
 :root{--bg:#0d0c0a;--bg2:#17150f;--bg3:#211d15;--line:#3a3222;--gold:#e0b65a;--gold2:#a8843c;--tx:#ddd6c8;--tx2:#9a9080;--red:#d8664f;--grn:#7fb069;--blu:#6fa8c8;--org:#e09a4a}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 "Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;-webkit-text-size-adjust:100%}
@@ -806,9 +807,10 @@ function createEngine(DATA, opt) {
       if (!it) continue;
       var q = it.rarity === 'unique' ? 1 : qtyFor(it);
       invAdd(C, it.id, q, W.t); gotIds[it.id] = 1;
-      got.push(it.name + (q > 1 ? '×' + q : ''));
+      got.push([it.name, q]);
     }
-    return got;
+    var mg = []; got.forEach(function (g) { var f = mg.filter(function (x) { return x[0] === g[0]; })[0]; if (f) f[1] += g[1]; else mg.push(g.slice()); });
+    return mg.map(function (g) { return g[0] + (g[1] > 1 ? '×' + g[1] : ''); });
   }
   E.lootRoll = lootRoll;
 
@@ -1502,7 +1504,7 @@ G.MREngine = { createEngine: createEngine };
 /* 末日求生者 求生日誌 介面 v1.0 */
 (function () {
 'use strict';
-var VER = '1.1.5';
+var VER = '1.1.6';
 var KS = LTStore.create('mori', {});
 var E = MREngine.createEngine(MR_DATA);
 var EMB = window.parent !== window;
@@ -1589,12 +1591,39 @@ function onStory(d) {
     var oldFirst = last.blocks[0] && last.blocks[0].t, newFirst = bl[0] && bl[0].t;
     /* 串流中：舊內容（去掉最後一段）是新內容的開頭 → 原地更新，不新增 */
     if (newT.indexOf(oldHead) === 0 && (oldHead.length > 0 || oldFirst === newFirst || (newFirst || '').indexOf(oldFirst || '\u0002') === 0)) {
-      last.blocks = bl; last.id = d.id; storySave(); scrollStory = true; if (!d.busy) busy = false; render(); return;
+      last.blocks = bl; last.id = d.id; storySave(); scrollStory = true; if (!d.busy) { busy = false; syncLoc(bl, d.id); } render(); return;
     }
   }
   storyPush({ k: 'ai', id: d.id, blocks: bl });
   if (!d.busy) busy = false;
+  if (!d.busy) syncLoc(bl, d.id);
   render();
+}
+/* 依 AI 時空列的地點對齊面板位置：相鄰就跟著移動，不相鄰就提醒 AI 拉回 */
+var locSynced = {};
+function syncLoc(bl, id) {
+  if (!W || !C || !C.alive || locSynced[id]) return;
+  var st = bl.filter(function (b) { return b.k === 'st'; })[0]; if (!st) return;
+  var parts = String(st.t).split(/[｜|]/); if (parts.length < 3) return;
+  var where = parts[2].trim(), p = E.pack(W.bg), cur = p._reg.get(C.location);
+  if (!where || where.indexOf(cur.name) >= 0) return;
+  var hit = p.regions.filter(function (r) { return where.indexOf(r.name) >= 0; }).sort(function (a, b) { return b.name.length - a.name.length; })[0];
+  if (!hit) return;
+  locSynced[id] = 1;
+  var adj = cur.links.some(function (l) { return l.to === hit.id; });
+  if (adj) {
+    var c = E.moveCost(W, C, hit.id) || { min: 30, st: 5 };
+    C.needs.stamina = Math.max(0, C.needs.stamina - (c.st || 5));
+    E.tick(W, C, c.min || 30, { mode: 'normal', noEvent: true });
+    C.location = hit.id; W.regions[hit.id].known = true; hit.links.forEach(function (l) { W.regions[l.to].known = true; });
+    E.log(W, '依劇情移動到' + hit.name);
+    W.pending.push('（日誌：已依劇情把位置更新為' + hit.name + '。之後換地點請輸出 go。）');
+    toast('📍 已移動到' + hit.name);
+  } else {
+    if (W.pending.some(function (x) { return x.indexOf('（日誌提醒：角色仍在') === 0; })) return;
+    W.pending.push('（日誌提醒：角色仍在' + cur.name + '，' + hit.name + '不相鄰，不能直接抵達。下一回合請把場景寫回' + cur.name + '或通往' + cur.links.map(function (l) { return p._reg.get(l.to).name; }).join('、') + '的路上，並用 go 移動。）');
+  }
+  save(); arm();
 }
 var FIGHT_RX = /(砍|劈|捅|揍|刺向|刺進|攻擊|動手打|對它動手|對他動手|開槍|開火|射擊|射殺|殺了|殺掉|殺死|拼了|拚了|迎戰|正面迎|正面硬|肉搏|搏鬥|戰鬥|反擊|打死|打倒|揮刀|揮棍|偷襲|撲上)/;
 var FIGHT_NOTE = '（給敘事者：玩家這回合打算動手。正文只寫到雙方交手前一刻就停，不寫誰打中、誰受傷、誰倒下，也不給行動按鈕；區塊輸出 encounter（enemy 用世界書敵人名稱，n 填數量）。勝負由求生日誌結算，等收到【戰鬥結果】再寫經過。）';
@@ -1778,7 +1807,7 @@ function finishDeath(cause, ctx) {
   var lines = ['【死亡】' + name + '｜死因：' + E.DEATH_NAME[cause] + '｜存活 ' + r.days + ' 天｜' + E.pack(W.bg)._reg.get(C.location).name];
   if (ctx && (ctx.header || (ctx.lines && ctx.lines.length))) lines.push('最後發生的事：' + [ctx.header].concat(ctx.lines || []).filter(Boolean).join('／'));
   if (ctx && ctx.event) lines.push('事件：' + ctx.event.name);
-  lines.push('（世界將過去 ' + r.skip + ' 天，之後由新的倖存者接手）');
+  lines.push('（給敘事者：這回合只寫' + name + '的最後一刻，安靜、具體。不要寫之後的世界、不要寫時間跳躍或其他人發現遺體（那些留給下一位倖存者的開場）。不給行動按鈕，不輸出 mori 區塊，最後一行寫「—— ' + name + '，存活 ' + r.days + ' 天。」）');
   save();
   sendToAI(lines.join('\n'));
   var deadC = C; C = null; view = 'dead'; startWizard('next');
