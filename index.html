@@ -1499,7 +1499,7 @@ G.MREngine = { createEngine: createEngine };
 /* 末日求生者 求生日誌 介面 v1.0 */
 (function () {
 'use strict';
-var VER = '1.1.1';
+var VER = '1.1.2';
 var KS = LTStore.create('mori', {});
 var E = MREngine.createEngine(MR_DATA);
 var EMB = window.parent !== window;
@@ -1541,12 +1541,12 @@ KS.onError = function (e) { storeErr = '存檔寫入失敗（' + e.msg + '），
 /* ================= 與載入器溝通 ================= */
 function post(m) { if (!EMB) return; try { window.parent.postMessage(Object.assign({ lt: 1 }, m), '*'); } catch (e) {} }
 function hint() { post({ t: 'hint', s: !W || !C ? '建立角色' : '第' + E.dayOf(W.t) + '天' }); }
-function armText() { var p = W.pending.length ? W.pending.join('\n') + '\n' : ''; return '\n' + p + E.stateBlock(W, C); }
+function armText() { var sb = E.stateBlock(W, C); if (W.pending.length) sb = sb.replace('[[MRS]]', '[[MRS]]' + W.pending.join('\n') + '\n'); return '\n' + sb; }
 function arm() { if (W && C && C.alive) post({ t: 'arm', obj: armText(), tail: '' }); else post({ t: 'arm', off: true }); hint(); }
 function sendToAI(text) {
   lastSent = text; save();
   storyPush({ k: 'me', t: text.split('\n')[0], sys: true });
-  if (EMB) { post({ t: 'fill', text: text, send: true, keep: true }); busy = true; render(); }
+  if (EMB) { post({ t: 'fill', text: text, send: true, keep: true }); busy = true; if (innerWidth < 760 && view === 'game') tab = 'story'; render(); }
   else showModal({ title: '要送給 AI 的訊息', body: '<p class="muted">（獨立開啟的面板無法直接送出，請複製貼到聊天框）</p><textarea style="min-height:220px" readonly>' + esc(text) + '</textarea>', buttons: [['複製', function () { try { navigator.clipboard.writeText(text); toast('已複製'); } catch (e) {} closeModal(); }], ['關閉', closeModal]] });
 }
 function onHost(e) {
