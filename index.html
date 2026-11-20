@@ -1025,7 +1025,7 @@ function createEngine(DATA, opt) {
     invRemove(C, 'wood', 1); res.lines.push('生了一堆火（木材 -1）'); return true;
   }
   E.sleep = function (W, C, hours) {
-    var e = E.eff(C), res = { lines: [], header: '【睡眠】' + hours + ' 小時', daily: true }, p = PACK[W.bg], reg = p._reg.get(C.location);
+    var e = E.eff(C), res = { lines: [], header: '【睡眠】' + hours + ' 小時' }, p = PACK[W.bg], reg = p._reg.get(C.location);
     var base = W.bases.filter(function (b) { return b.region === C.location && b.owner === C.charId; })[0];
     var interrupt = false, at = 0;
     if (base) { if (d100() > base.def + e.baseDef + 20) interrupt = true; }
@@ -1042,7 +1042,6 @@ function createEngine(DATA, opt) {
     C.needs.mind = clamp(C.needs.mind + (base ? 8 : 3), 0, 100);
     res.lines.push('睡了 ' + slept + ' 小時' + (base ? '（基地）' : ''));
     if (interrupt) {
-      res.daily = false;
       var enc = rollEncounter(W, C);
       if (enc && !enc.trap && !enc.npc) { res.encounter = enc; res.lines.push('睡到一半被驚醒：' + enc.name + '×' + enc.n); }
       else res.lines.push('睡到一半被聲響驚醒，什麼也沒看到');
@@ -1499,7 +1498,7 @@ G.MREngine = { createEngine: createEngine };
 /* 末日求生者 求生日誌 介面 v1.0 */
 (function () {
 'use strict';
-var VER = '1.1.2';
+var VER = '1.1.3';
 var KS = LTStore.create('mori', {});
 var E = MREngine.createEngine(MR_DATA);
 var EMB = window.parent !== window;
@@ -1694,6 +1693,7 @@ function onEvents(id, text) {
   r.warn.forEach(function (w) { W.pending.push('（日誌提醒：' + w + '）'); });
   if (r.risk) { msgs.push((r.risk.ok ? '✓ ' : '✗ ') + r.risk.act); toast(r.risk.text.replace('【風險】', '')); }
   r.lines.forEach(function (l) { E.dayNote(W, l); });
+  var dr = dayRollLines(); if (dr.length) W.pending.push(dr.join('\n'));
   save(); post({ t: 'ingested', id: id, status: 'ok', msg: msgs.join('｜').slice(0, 60) });
   if (r.death) { finishDeath(r.death, { header: '', lines: r.notes, notes: [] }); return; }
   if (r.event) { runChain({ event: r.event, lines: [], notes: r.notes, header: '【時間流逝】' }); return; }
@@ -1744,7 +1744,7 @@ function addCombat(ctx, enc, cr) {
 function finalize(ctx, res) {
   var g = E.checkGoal(W, C, M);
   if (g.length) { ctx.goal = g.filter(function (x) { return typeof x === 'string'; }); if (g.ending) ctx.notes.push('終局達成。請以這段意象寫結局：' + g.ending + '。寫完後世界仍會繼續，玩家可以選擇繼續生活。'); }
-  if (res && res.daily) { var dnum = W.dayStats ? W.dayStats.day : E.dayOf(W.t); var sum = E.daySummary(W, C); ctx.lines.push('【日結】第' + dnum + '天結束'); ctx.lines = ctx.lines.concat(sum); }
+  ctx.lines = ctx.lines.concat(dayRollLines());
   if (res && res.took) { var a0 = E.checkAch(M, W, C, { takeBase: true }); achToast(a0); }
   if (res && res.prevChar) { var a1 = E.checkAch(M, W, C, { lootCorpse: true }); achToast(a1); }
   achToast(E.checkAch(M, W, C, {}));
@@ -1753,6 +1753,12 @@ function finalize(ctx, res) {
   save();
   sendToAI(E.compose(W, C, ctx));
   render(); arm();
+}
+/* 過了午夜才結算：任何行動或 AI 的時間推進跨日都會觸發 */
+function dayRollLines() {
+  if (!W || !C || !W.dayStats || E.dayOf(W.t) <= W.dayStats.day) return [];
+  var dnum = W.dayStats.day, sum = E.daySummary(W, C);
+  return ['【日結】第' + dnum + '天結束'].concat(sum);
 }
 function achToast(list) { (list || []).forEach(function (a) { var r = a.reward, s = r.unlockTrait ? '解鎖特性「' + E.trait(r.unlockTrait).name + '」' : r.unlockJob ? '解鎖職業「' + E.job(r.unlockJob).name + '」' : r.bonusPoints ? '起始點數 +' + r.bonusPoints : ''; toast('🏅 ' + a.name + (s ? '：' + s : '')); }); }
 
@@ -1990,7 +1996,7 @@ function tAct() {
   ['quick', 'careful', 'thorough'].forEach(function (k) { h += '<button class="btn" data-a="explore" data-v="' + k + '"' + dis + '>' + D[k].name + '<small>' + D[k].min + '分・耐力-' + D[k].st + '</small></button>'; });
   h += '</div><p class="muted">已搜索 ' + W.regions[C.location].searched + ' 次' + (W.regions[C.location].looted > 0.8 ? '・這裡快被搜刮空了' : '') + (E.isNight(W.t) ? '・夜間' : '') + '</p></div>';
   var wt = E.waterHere(W, C);
-  h += '<div class="card"><h3>🔥 生存</h3><div class="grid3"><button class="btn" data-a="rest"' + dis + '>休息<small>1小時・耐力+20</small></button><button class="btn" data-a="sleep" data-v="6"' + dis + '>睡 6 小時</button><button class="btn" data-a="sleep" data-v="8"' + dis + '>睡 8 小時<small>結束一天</small></button>' + (wt ? '<button class="btn" data-a="water"' + dis + '>取水<small>' + esc(E.itemName(wt)) + '</small></button>' : '') + '</div></div>';
+  h += '<div class="card"><h3>🔥 生存</h3><div class="grid3"><button class="btn" data-a="rest"' + dis + '>休息<small>1小時・耐力+20</small></button><button class="btn" data-a="sleep" data-v="6"' + dis + '>睡 6 小時</button><button class="btn" data-a="sleep" data-v="8"' + dis + '>睡 8 小時<small>過午夜才結算當天</small></button>' + (wt ? '<button class="btn" data-a="water"' + dis + '>取水<small>' + esc(E.itemName(wt)) + '</small></button>' : '') + '</div></div>';
   var bi = E.baseInfo(W, C);
   if (bi.canBuild || bi.base) {
     h += '<div class="card"><h3>🏠 基地<span>' + (bi.base ? '防禦 ' + bi.base.def : '可建基地') + '</span></h3><div class="grid2">';
