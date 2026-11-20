@@ -1560,15 +1560,29 @@ function onHost(e) {
 
 /* ================= 劇情頁 ================= */
 function storyKey() { return W ? 'st:' + W.worldId : null; }
-function storyLoad() { storyLog = (storyKey() && J(storyKey())) || []; }
+function storyLoad() {
+  var raw = (storyKey() && J(storyKey())) || [], out = [];
+  raw.forEach(function (x) { var p = out[out.length - 1]; if (x.k === 'ai' && p && p.k === 'ai' && blocksText(x.blocks).indexOf(blocksText(p.blocks.slice(0, -1))) === 0) out[out.length - 1] = x; else out.push(x); });
+  storyLog = out;
+}
 function storySave() { if (storyKey()) KS.set(storyKey(), JSON.stringify(storyLog.slice(-12))); }
 function storyPush(x) { storyLog.push(x); if (storyLog.length > 12) storyLog = storyLog.slice(-12); scrollStory = true; storySave(); }
+function blocksText(bl) { return bl.map(function (b) { return (b.k === 'btn' ? b.s : b.t || '') + '\u0001'; }).join(''); }
 function onStory(d) {
-  if (!d.blocks || !d.blocks.length) return;
-  var last = storyLog.filter(function (x) { return x.k === 'ai'; }).slice(-1)[0];
-  if (last && last.id === d.id) return;
-  if (last && last.sig && JSON.stringify(last.blocks) === JSON.stringify(d.blocks)) return;
-  storyPush({ k: 'ai', id: d.id, blocks: d.blocks, sig: 1 });
+  var bl = (d.blocks || []).filter(function (b) { var t = (b.t || '').trim(); return !(b.k !== 'btn' && /^(正在回覆|思考中)[.…]*$/.test(t)); });
+  if (!bl.length) return;
+  var lastI = storyLog.length - 1, last = storyLog[lastI];
+  if (last && last.k === 'ai') {
+    var oldT = blocksText(last.blocks), newT = blocksText(bl);
+    if (oldT === newT) return;
+    var oldHead = blocksText(last.blocks.slice(0, -1));
+    var oldFirst = last.blocks[0] && last.blocks[0].t, newFirst = bl[0] && bl[0].t;
+    /* 串流中：舊內容（去掉最後一段）是新內容的開頭 → 原地更新，不新增 */
+    if (newT.indexOf(oldHead) === 0 && (oldHead.length > 0 || oldFirst === newFirst || (newFirst || '').indexOf(oldFirst || '\u0002') === 0)) {
+      last.blocks = bl; last.id = d.id; storySave(); scrollStory = true; if (!d.busy) busy = false; render(); return;
+    }
+  }
+  storyPush({ k: 'ai', id: d.id, blocks: bl });
   if (!d.busy) busy = false;
   render();
 }
