@@ -1444,6 +1444,7 @@ function createEngine(DATA, opt) {
     var g = E.goalOf(W), gs = W.goal.done ? '已完成' : W.goal.accepted ? '進行中：' + (E.goalStep(W) || {}).name : '未接';
     lines.push('終局：' + g.name + '（' + gs + '）');
     if (C._nearPrev && C.gen > 1) lines.push('（靠近前任死亡地）');
+    lines.push('提醒：敵人撲來或玩家動手時，正文停在交手前一刻，區塊輸出 encounter，勝負交給日誌。');
     return '[[MRS]]' + lines.join('\n') + '[[/MRS]]';
   };
   function renownTier(v) { return v <= -50 ? '通緝' : v <= -15 ? '惡名' : v < 15 ? '無名' : v < 50 ? '有名' : '聲名遠播'; }
@@ -1498,7 +1499,7 @@ G.MREngine = { createEngine: createEngine };
 /* 末日求生者 求生日誌 介面 v1.0 */
 (function () {
 'use strict';
-var VER = '1.1.0';
+var VER = '1.1.1';
 var KS = LTStore.create('mori', {});
 var E = MREngine.createEngine(MR_DATA);
 var EMB = window.parent !== window;
@@ -1586,12 +1587,15 @@ function onStory(d) {
   if (!d.busy) busy = false;
   render();
 }
+var FIGHT_RX = /(砍|劈|捅|揍|刺向|刺進|攻擊|動手|開槍|開火|射擊|射殺|殺了|殺掉|殺死|拼了|迎戰|正面|肉搏|搏鬥|戰鬥|反擊|打死|打倒|揮刀|揮棍|偷襲|撲上)/;
+var FIGHT_NOTE = '（給敘事者：玩家這回合打算動手。正文只寫到雙方交手前一刻就停，不寫誰打中、誰受傷、誰倒下，也不給行動按鈕；區塊輸出 encounter（enemy 用世界書敵人名稱，n 填數量）。勝負由求生日誌結算，等收到【戰鬥結果】再寫經過。）';
 function sendFree(text) {
   text = String(text || '').trim(); if (!text) return;
   if (busy && EMB) { toast('AI 正在回覆，稍等一下'); return; }
   if (!C || !C.alive) { toast('請先建立角色'); return; }
   storyPush({ k: 'me', t: text });
   draft = '';
+  if (FIGHT_RX.test(text) && W.pending.indexOf(FIGHT_NOTE) < 0) { W.pending.push(FIGHT_NOTE); save(); arm(); }
   if (EMB) { post({ t: 'fill', text: text, send: true, keep: true }); busy = true; }
   else { sendToAI(text + armText()); return; }
   render();
@@ -1645,7 +1649,7 @@ function boot() {
   document.addEventListener('focusin', function (e) { if (e.target.id === 'say') sayFocus = true; });
   document.addEventListener('focusout', function (e) { if (e.target.id === 'say') sayFocus = false; });
   window.addEventListener('resize', function () { var w = innerWidth >= 760; if (w !== wideMode) render(); });
-  window.__mr = { E: E, KS: KS, state: function () { return { M: M, W: W, C: C, view: view, busy: busy }; }, set: function (o) { if (o.W) W = o.W; if (o.C) C = o.C; render(); } };
+  window.__mr = { E: E, KS: KS, sendFree: function (t) { busy = false; sendFree(t); }, state: function () { return { M: M, W: W, C: C, view: view, busy: busy }; }, set: function (o) { if (o.W) W = o.W; if (o.C) C = o.C; render(); } };
   post({ t: 'hello', v: VER });
   arm();
   early.forEach(onHost); early = [];
