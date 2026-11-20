@@ -1352,13 +1352,16 @@ function createEngine(DATA, opt) {
     try { var o = JSON.parse(s); return o && Array.isArray(o.events) ? o : null; } catch (e) { return null; }
   };
   /* 回傳 { lines, notes, encounter, go, trade, risk, autoSend } */
-  E.ingest = function (W, C, M, obj) {
+  E.ingest = function (W, C, M, obj, opt) {
     var out = { lines: [], notes: [], warn: [] }, p = PACK[W.bg];
     if (!C || !C.alive) return out;
-    var gains = 0;
+    var gains = 0, evs = obj.events || [];
+    /* 日誌行動的回合、或同區塊有 go（路程由日誌計時）時，不採用 AI 的 time，避免重複計時 */
+    var noTime = (opt && opt.noTime) || evs.some(function (e) { return e && e.type === 'go'; });
     (obj.events || []).forEach(function (ev) {
       var tp = ev.type;
-      if (tp === 'time') { var mn = clamp(parseInt(ev.min, 10) || 0, 0, 120); if (mn) { var tk = E.tick(W, C, mn, { mode: 'normal' }); if (tk.death) out.death = tk.death; if (tk.event) out.event = tk.event; out.notes = out.notes.concat(tk.notes); } }
+      if (tp === 'time' && noTime) { }
+      else if (tp === 'time') { var mn = clamp(parseInt(ev.min, 10) || 0, 0, 120); if (mn) { var tk = E.tick(W, C, mn, { mode: 'normal' }); if (tk.death) out.death = tk.death; if (tk.event) out.event = tk.event; out.notes = out.notes.concat(tk.notes); } }
       else if (tp === 'go') { var r = E.findRegion(W.bg, ev.to); if (r && r.id !== C.location) { var link = p._reg.get(C.location).links.some(function (l) { return l.to === r.id; }); if (link) out.go = r.id; else out.warn.push('「' + r.name + '」不在相鄰路線上，需要經過其他地點'); } }
       else if (tp === 'encounter') { var en = E.findEnemy(W.bg, ev.enemy); if (en) out.encounter = makeEncounter(W, C, en, clamp(parseInt(ev.n, 10) || 1, 1, en.group[1] + 2)); }
       else if (tp === 'gain') { (ev.items || []).forEach(function (x) { if (gains >= 2) return; var it = E.findItem(W.bg, x[0], true); if (it && it.rarity === 'common') { invAdd(C, it.id, clamp(x[1] || 1, 1, 2), W.t); gains++; out.lines.push('獲得：' + it.name); } else out.warn.push('「' + x[0] + '」不是可直接取得的常見物品，已略過'); }); }
@@ -1435,6 +1438,7 @@ function createEngine(DATA, opt) {
     lines.push('狀態：' + (st.length ? st.join('、') : '無') + (sp.length ? '｜' + sp.join('、') : ''));
     var nt = C.traits.filter(function (t) { return NARR_TRAITS.indexOf(t.id) >= 0; }).map(function (t) { return TRAITS.get(t.id).name + (t.pick ? '(' + t.pick + ')' : ''); });
     if (nt.length) lines.push('特性：' + nt.join('、'));
+    lines.push('可前往：' + reg.links.map(function (l) { return p._reg.get(l.to).name; }).join('、') + '（換地點只能選這些，並輸出 go）');
     lines.push('裝備：' + (C.equip.weapon ? E.itemName(C.equip.weapon) : '空手') + '｜' + (C.equip.armor ? E.itemName(C.equip.armor) : '無護具'));
     var inv = C.inv.filter(function (s) { return s.id !== C.equip.weapon && s.id !== C.equip.armor; }).slice(0, 14).map(function (s) { return E.itemName(s.id) + (s.n > 1 ? '×' + s.n : ''); });
     lines.push('身上：' + (inv.length ? inv.join('、') : '空無一物'));
@@ -1498,7 +1502,7 @@ G.MREngine = { createEngine: createEngine };
 /* 末日求生者 求生日誌 介面 v1.0 */
 (function () {
 'use strict';
-var VER = '1.1.4';
+var VER = '1.1.5';
 var KS = LTStore.create('mori', {});
 var E = MREngine.createEngine(MR_DATA);
 var EMB = window.parent !== window;
@@ -1544,6 +1548,7 @@ function hint() { post({ t: 'hint', s: !W || !C ? '建立角色' : '第' + E.day
 function armText() { var sb = E.stateBlock(W, C); if (W.pending.length) sb = sb.replace('[[MRS]]', '[[MRS]]' + W.pending.join('\n') + '\n'); return '\n' + sb; }
 function arm() { if (W && C && C.alive) post({ t: 'arm', obj: armText(), tail: '' }); else post({ t: 'arm', off: true }); hint(); }
 function sendToAI(text) {
+  if (W) W.panelTurn = true; /* 日誌組的訊息含 [[MRS]]，不會觸發 consumed */
   lastSent = text; save();
   storyPush({ k: 'me', t: text.split('\n')[0], sys: true });
   if (EMB) { post({ t: 'fill', text: text, send: true, keep: true }); busy = true; if (innerWidth < 760 && view === 'game') tab = 'story'; render(); }
@@ -1553,11 +1558,12 @@ function onHost(e) {
   var d = e.data; if (!d || d.lt !== 1) return;
   if (d.t === 'busy') { busy = !!d.on; render(); }
   else if (d.t === 'fillres') { if (d.s && d.s.indexOf('已送出') < 0) toast(d.s); }
-  else if (d.t === 'consumed') { if (W) { W.pending = []; save(); arm(); } }
+  else if (d.t === 'consumed') { if (W) { W.panelTurn = false; W.pending = []; save(); arm(); } }
   else if (d.t === 'conv') onConv(d.id, d.u);
   else if (d.t === 'events') onEvents(d.id, d.text);
   else if (d.t === 'story') onStory(d);
-  else if (DEBUG && d.t === 'tap') { var el = document.querySelectorAll(d.sel)[d.i || 0]; if (el) el.click(); post({ t: 'dbg', ok: !!el, sel: d.sel }); }
+  else if (DEBUG && d.t === 'tap') { var el = document.querySelectorAll(d.sel)[d.i || 0]; if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); post({ t: 'dbg', ok: !!el, sel: d.sel }); }
+  else if (DEBUG && d.t === 'set') { if (C && d.needs) Object.assign(C.needs, d.needs); if (C && d.special) Object.assign(C.special, d.special); save(); render(); arm(); post({ t: 'dbg', ok: !!C }); }
   else if (DEBUG && d.t === 'type') { var ip = document.querySelector(d.sel); if (ip) { ip.value = d.v; ip.dispatchEvent(new Event('input', { bubbles: true })); ip.dispatchEvent(new Event('change', { bubbles: true })); } post({ t: 'dbg', ok: !!ip, sel: d.sel }); }
   else if (DEBUG && d.t === 'peek') post({ t: 'dbg', text: (document.getElementById('app') || document.body).innerText.slice(0, d.n || 4000), state: W && C ? { t: W.t, loc: C.location, needs: C.needs, special: C.special, inv: C.inv.map(function (x) { return x.id + 'x' + x.n; }), bg: W.bg, gen: C.gen, alive: C.alive } : null });
 }
@@ -1590,14 +1596,14 @@ function onStory(d) {
   if (!d.busy) busy = false;
   render();
 }
-var FIGHT_RX = /(砍|劈|捅|揍|刺向|刺進|攻擊|動手|開槍|開火|射擊|射殺|殺了|殺掉|殺死|拼了|迎戰|正面|肉搏|搏鬥|戰鬥|反擊|打死|打倒|揮刀|揮棍|偷襲|撲上)/;
+var FIGHT_RX = /(砍|劈|捅|揍|刺向|刺進|攻擊|動手打|對它動手|對他動手|開槍|開火|射擊|射殺|殺了|殺掉|殺死|拼了|拚了|迎戰|正面迎|正面硬|肉搏|搏鬥|戰鬥|反擊|打死|打倒|揮刀|揮棍|偷襲|撲上)/;
 var FIGHT_NOTE = '（給敘事者：玩家這回合打算動手。正文只寫到雙方交手前一刻就停，不寫誰打中、誰受傷、誰倒下，也不給行動按鈕；區塊輸出 encounter（enemy 用世界書敵人名稱，n 填數量）。勝負由求生日誌結算，等收到【戰鬥結果】再寫經過。）';
 function sendFree(text) {
   text = String(text || '').trim(); if (!text) return;
   if (busy && EMB) { toast('AI 正在回覆，稍等一下'); return; }
   if (!C || !C.alive) { toast('請先建立角色'); return; }
   storyPush({ k: 'me', t: text });
-  draft = '';
+  draft = ''; W.panelTurn = false; save();
   if (FIGHT_RX.test(text) && W.pending.indexOf(FIGHT_NOTE) < 0) { W.pending.push(FIGHT_NOTE); save(); arm(); }
   if (EMB) { post({ t: 'fill', text: text, send: true, keep: true }); busy = true; }
   else { sendToAI(text + armText()); return; }
@@ -1692,7 +1698,7 @@ function onEvents(id, text) {
   var obj = E.parseBlock(text);
   if (!W || !C || !C.alive) { post({ t: 'ingested', id: id, status: 'nosave' }); return; }
   if (!obj) { post({ t: 'ingested', id: id, status: 'ok', msg: '區塊格式無法解析' }); return; }
-  var r = E.ingest(W, C, M, obj), msgs = [];
+  var r = E.ingest(W, C, M, obj, { noTime: !!W.panelTurn }), msgs = [];
   if (r.lines.length) msgs.push(r.lines.join('、'));
   r.warn.forEach(function (w) { W.pending.push('（日誌提醒：' + w + '）'); });
   if (r.risk) { msgs.push((r.risk.ok ? '✓ ' : '✗ ') + r.risk.act); toast(r.risk.text.replace('【風險】', '')); }
@@ -1702,7 +1708,7 @@ function onEvents(id, text) {
   if (r.death) { finishDeath(r.death, { header: '', lines: r.notes, notes: [] }); return; }
   if (r.event) { runChain({ event: r.event, lines: [], notes: r.notes, header: '【時間流逝】' }); return; }
   if (r.go) { setTimeout(function () { var res = E.move(W, C, r.go); if (res.error) { toast(res.error); return; } res.header = res.header.replace('【移動】', '【抵達】'); runChain(res); }, 400); return; }
-  if (r.encounter) { post({ t: 'want', open: true }); combatDialog(r.encounter, function (cr) { var ctx = { header: '【戰鬥結果】', lines: [], notes: [] }; addCombat(ctx, r.encounter, cr); if (cr.death) return finishDeath(cr.death, ctx); finalize(ctx, {}); }); return; }
+  if (r.encounter) { post({ t: 'want', open: true }); combatDialog(r.encounter, function (cr) { var ctx = { header: '', lines: [], notes: [] }; addCombat(ctx, r.encounter, cr); if (cr.death) return finishDeath(cr.death, ctx); finalize(ctx, {}); }); return; }
   if (r.trade) { post({ t: 'want', open: true }); tradeDialog(r.trade); }
   render(); arm();
 }
