@@ -1076,6 +1076,48 @@ function createEngine(DATA, opt) {
     return res;
   };
 
+  /* ================= 多段路程：不相鄰的地點自動找路 ================= */
+  E.pathTo = function (W, from, to) {
+    var dist = {}, prev = {}, todo = PACK[W.bg].regions.map(function (r) { return r.id; });
+    todo.forEach(function (id) { dist[id] = Infinity; }); dist[from] = 0;
+    while (todo.length) {
+      todo.sort(function (a, b) { return dist[a] - dist[b]; });
+      var u = todo.shift(); if (dist[u] === Infinity || u === to) break;
+      E.linksOf(W, u).forEach(function (l) { var d = dist[u] + l.min; if (d < dist[l.to]) { dist[l.to] = d; prev[l.to] = u; } });
+    }
+    if (dist[to] === Infinity) return null;
+    var path = [], x = to; while (x !== from) { path.unshift(x); x = prev[x]; }
+    return path;
+  };
+  /* 劇情已經寫到抵達：照路線扣時間與耐力，不另擲遭遇 */
+  E.travelSilent = function (W, C, toId) {
+    var path = E.pathTo(W, C.location, toId); if (!path) return null;
+    var tot = 0, st = 0, here = C.location;
+    path.forEach(function (id) { var c = E.moveCost(W, Object.assign({}, C, { location: here }), id) || { min: 30, st: 5 }; tot += c.min || 30; st += c.st || 5; here = id; });
+    C.needs.stamina = clamp(C.needs.stamina - st, 0, E.stMax(C));
+    var tk = E.tick(W, C, tot, { mode: 'normal', noEvent: true });
+    path.forEach(function (id) { reveal(W, id, true); });
+    C.location = toId;
+    return { path: path, min: tot, death: tk.death, notes: tk.notes };
+  };
+  /* 玩家要去不相鄰的地點：一段一段走，途中遇敵或出事就停在那裡 */
+  E.travel = function (W, C, toId) {
+    var p = PACK[W.bg], path = E.pathTo(W, C.location, toId), startName = p._reg.get(C.location).name;
+    if (!path) return { error: '找不到通往那裡的路', lines: [] };
+    var res = { lines: [], notes: [], header: '' }, passed = [];
+    for (var i = 0; i < path.length; i++) {
+      var r = E.move(W, C, path[i]);
+      if (r.error) { if (!passed.length) return r; res.notes.push('走到一半停下：' + r.error); break; }
+      passed.push(p._reg.get(path[i]).name);
+      res.lines = res.lines.concat(r.lines.filter(function (l) { return l.indexOf('看到了新的去處') < 0; }));
+      res.notes = res.notes.concat(r.notes || []);
+      if (r.death) { res.death = r.death; break; }
+      if (r.encounter || r.event) { res.encounter = r.encounter; res.event = r.event; if (i < path.length - 1) res.notes.push('原本要去' + p._reg.get(toId).name + '，在' + passed[passed.length - 1] + '被打斷'); break; }
+    }
+    res.header = '【移動】' + startName + ' → ' + passed.join(' → ');
+    return res;
+  };
+
   /* ================= 行動：取水 ================= */
   E.waterHere = function (W, C) { var r = PACK[W.bg]._reg.get(C.location); return r && r.water && E.itemAvail(r.water, W.bg) ? r.water : null; };
   E.fetchWater = function (W, C) {
@@ -1442,7 +1484,7 @@ function createEngine(DATA, opt) {
       var tp = ev.type;
       if (tp === 'time' && noTime) { }
       else if (tp === 'time') { var mn = clamp(parseInt(ev.min, 10) || 0, 0, 120); if (mn) { var tk = E.tick(W, C, mn, { mode: 'normal' }); if (tk.death) out.death = tk.death; if (tk.event) out.event = tk.event; out.notes = out.notes.concat(tk.notes); } }
-      else if (tp === 'go') { var r = E.findRegion(W.bg, ev.to); if (r && r.id !== C.location) { var link = E.isAdj(W, C.location, r.id); if (link) out.go = r.id; else out.warn.push('「' + r.name + '」不在相鄰路線上，需要經過其他地點'); } }
+      else if (tp === 'go') { var r = E.findRegion(W.bg, ev.to); if (r && r.id !== C.location) { if (E.pathTo(W, C.location, r.id)) out.go = r.id; else out.warn.push('找不到通往「' + r.name + '」的路'); } }
       else if (tp === 'encounter') { var en = E.findEnemy(W.bg, ev.enemy); if (en) out.encounter = makeEncounter(W, C, en, clamp(parseInt(ev.n, 10) || 1, 1, en.group[1] + 2)); }
       else if (tp === 'gain') { (ev.items || []).forEach(function (x) { if (gains >= 2) return; var it = E.findItem(W.bg, x[0], true); if (it && it.rarity === 'common') { invAdd(C, it.id, clamp(x[1] || 1, 1, 2), W.t); gains++; out.lines.push('獲得：' + it.name); } else out.warn.push('「' + x[0] + '」不是可直接取得的常見物品，已略過'); }); }
       else if (tp === 'npc') { var nx = E.npcAff(W, C, ev.name, parseInt(ev.aff, 10) || 0); out.lines.push(nx.name + ' 好感 ' + ((ev.aff || 0) >= 0 ? '+' : '') + (ev.aff || 0)); }
@@ -1605,7 +1647,7 @@ G.MREngine = { createEngine: createEngine };
 /* 末日求生者 求生日誌 介面 v1.0 */
 (function () {
 'use strict';
-var VER = '1.2.1';
+var VER = '1.2.2';
 var KS = LTStore.create('mori', {});
 var E = MREngine.createEngine(MR_DATA);
 var EMB = window.parent !== window;
@@ -1711,19 +1753,13 @@ function syncLoc(bl, id) {
   var hit = p.regions.filter(function (r) { return where.indexOf(r.name) >= 0; }).sort(function (a, b) { return b.name.length - a.name.length; })[0];
   if (!hit) return;
   locSynced[id] = 1;
-  var adj = E.isAdj(W, cur.id, hit.id);
-  if (adj) {
-    var c = E.moveCost(W, C, hit.id) || { min: 30, st: 5 };
-    C.needs.stamina = Math.max(0, C.needs.stamina - (c.st || 5));
-    E.tick(W, C, c.min || 30, { mode: 'normal', noEvent: true });
-    C.location = hit.id; W.regions[hit.id].known = true; E.linksOf(W, hit.id).forEach(function (l) { W.regions[l.to].known = true; });
-    E.log(W, '依劇情移動到' + hit.name);
-    W.pending.push('（日誌：已依劇情把位置更新為' + hit.name + '。之後換地點請輸出 go。）');
-    toast('📍 已移動到' + hit.name);
-  } else {
-    if (W.pending.some(function (x) { return x.indexOf('（日誌提醒：角色仍在') === 0; })) return;
-    W.pending.push('（日誌提醒：角色仍在' + cur.name + '，' + hit.name + '不相鄰，不能直接抵達。下一回合請把場景寫回' + cur.name + '或通往' + E.linksOf(W, cur.id).map(function (l) { return p._reg.get(l.to).name; }).join('、') + '的路上，並用 go 移動。）');
-  }
+  var tr = E.travelSilent(W, C, hit.id);
+  if (!tr) return;
+  var via = tr.path.slice(0, -1).map(function (x) { return p._reg.get(x).name; });
+  E.log(W, '依劇情移動到' + hit.name);
+  W.pending.push('（日誌：已依劇情把位置更新為' + hit.name + (via.length ? '（途經' + via.join('、') + '）' : '') + '，路上約 ' + tr.min + ' 分鐘。之後換地點請輸出 go。）');
+  toast('📍 已移動到' + hit.name);
+  if (tr.death) { save(); finishDeath(tr.death, { header: '【移動】', lines: [], notes: [] }); return; }
   save(); arm();
 }
 var FIGHT_RX = /(砍|劈|捅|揍|刺向|刺進|攻擊|動手打|對它動手|對他動手|開槍|開火|射擊|射殺|殺了|殺掉|殺死|拼了|拚了|迎戰|正面迎|正面硬|肉搏|搏鬥|戰鬥|反擊|打死|打倒|揮刀|揮棍|偷襲|撲上)/;
@@ -1837,7 +1873,7 @@ function onEvents(id, text) {
   save(); post({ t: 'ingested', id: id, status: 'ok', msg: msgs.join('｜').slice(0, 60) });
   if (r.death) { finishDeath(r.death, { header: '', lines: r.notes, notes: [] }); return; }
   if (r.event) { runChain({ event: r.event, lines: [], notes: r.notes, header: '【時間流逝】' }); return; }
-  if (r.go) { setTimeout(function () { var res = E.move(W, C, r.go); if (res.error) { toast(res.error); return; } res.header = res.header.replace('【移動】', '【抵達】'); runChain(res); }, 400); return; }
+  if (r.go) { setTimeout(function () { if (C.location === r.go) { render(); arm(); return; } var res = E.isAdj(W, C.location, r.go) ? E.move(W, C, r.go) : E.travel(W, C, r.go); if (res.error) { toast(res.error); return; } res.header = res.header.replace('【移動】', '【抵達】'); runChain(res); }, 400); return; }
   if (r.encounter) { post({ t: 'want', open: true }); combatDialog(r.encounter, function (cr) { var ctx = { header: '', lines: [], notes: [] }; addCombat(ctx, r.encounter, cr); if (cr.death) return finishDeath(cr.death, ctx); finalize(ctx, {}); }); return; }
   if (r.trade) { post({ t: 'want', open: true }); tradeDialog(r.trade); }
   render(); arm();
