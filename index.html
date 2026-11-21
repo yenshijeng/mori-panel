@@ -1452,8 +1452,31 @@ function createEngine(DATA, opt) {
       else if (tp === 'flag') { var e = E.eff(C); e.onFlag.filter(function (f) { return f.flag === ev.flag || (ev.flag === 'addict' && f.flag === 'addict_dose'); }).forEach(function (f) { var c = E.applyEff(W, C, f.effects); out.lines = out.lines.concat(c.lines); if (f.effects.lockAction) C._lockUntil = W.t + 30; }); if (ev.flag === 'addict') { ['tobacco', 'alcohol', 'drug'].forEach(function (t) { if (needsTag(C, t)) { C.lastDose[t] = W.t; cureStatus(C, 'weak'); } }); } }
       else if (tp === 'risk') { out.risk = E.resolveRisk(W, C, ev.act || ev.type2 || '', ev.lv || '中'); }
       else if (tp === 'renown') { if (W.bg === 'medieval') { var v = clamp(parseInt(ev.v, 10) || 0, -10, 10); C.special.renown = clamp(C.special.renown + v, -100, 100); out.lines.push('聲望 ' + (v >= 0 ? '+' : '') + v); } }
+      else if (tp === 'use') {
+        if ((out._uses = (out._uses || 0) + 1) > 2) return;
+        var nm = norm(ev.item || ev.name), invIt = C.inv.map(function (st) { return ITEMS.get(st.id); }).filter(Boolean);
+        var hit = invIt.filter(function (i) { return norm(i.name) === nm; })[0] || fuzzy(ev.item || ev.name, invIt);
+        if (!hit) out.warn.push('身上沒有「' + (ev.item || ev.name || '?') + '」，這個動作沒有效果');
+        else if (!hit.use && !hit.cures) out.warn.push('「' + hit.name + '」不能直接使用');
+        else { var ur = E.useItem(W, C, hit.id); if (ur.error) out.warn.push(ur.error); else { out.lines.push('使用：' + hit.name); out.lines = out.lines.concat(ur.lines); if (ur.death) out.death = ur.death; } }
+      }
+      else if (tp === 'water') {
+        if (out._water) return; out._water = true;
+        if (E.waterHere(W, C)) { var wr = E.fetchWater(W, C); if (wr.error) out.warn.push(wr.error); else { out.lines = out.lines.concat(wr.lines); if (wr.death) out.death = wr.death; if (wr.event) out.event = wr.event; } }
+        else if (E.itemAvail('dirty_water', W.bg)) { invAdd(C, 'dirty_water', 1, W.t); out.lines.push('裝了 生水×1（沒煮過，喝了可能生病）'); }
+        else out.warn.push('這裡沒有可以取水的地方');
+      }
+      else if (tp === 'craft') {
+        if (out._craft) return; out._craft = true;
+        var want = norm(ev.item || ev.name), rs = E.recipesFor(W, C);
+        var rc = rs.filter(function (x) { return norm(x.recipe.name) === want || norm(E.itemName(x.recipe.out[0])) === want; })[0]
+          || rs.filter(function (x) { var a = norm(x.recipe.name), b = norm(E.itemName(x.recipe.out[0])); return want && (a.indexOf(want) >= 0 || want.indexOf(a) >= 0 || b.indexOf(want) >= 0 || want.indexOf(b) >= 0); })[0];
+        if (!rc) out.warn.push('沒有「' + (ev.item || ev.name || '?') + '」的做法，這個動作沒有效果');
+        else { var cr = E.craft(W, C, rc.recipe.id); if (cr.error) out.warn.push('做不出' + rc.recipe.name + '：' + cr.error); else { out.lines = out.lines.concat(cr.lines); if (cr.death) out.death = cr.death; if (cr.event) out.event = cr.event; } }
+      }
       else if (tp === 'trade') { out.trade = { name: ev.name || '', give: (ev.give || []).slice(0, 4), get: (ev.get || []).slice(0, 3) }; }
     });
+    delete out._uses; delete out._water; delete out._craft;
     if (C.needs.health <= 0 && !out.death) out.death = 'health';
     return out;
   };
@@ -1527,7 +1550,7 @@ function createEngine(DATA, opt) {
     var g = E.goalOf(W), gs = W.goal.done ? '已完成' : W.goal.accepted ? '進行中：' + (E.goalStep(W) || {}).name : '未接';
     lines.push('終局：' + g.name + '（' + gs + '）');
     if (C._nearPrev && C.gen > 1) lines.push('（靠近前任死亡地）');
-    lines.push('提醒：敵人撲來或玩家動手時，正文停在交手前一刻，區塊輸出 encounter，勝負交給日誌。');
+    lines.push('提醒：敵人撲來或玩家動手→正文停在交手前、輸出 encounter；玩家吃喝或用身上的物品→use，取水裝水→water，動手做東西→craft。數值一律交給日誌，身上沒有的東西不能用。');
     return '[[MRS]]' + lines.join('\n') + '[[/MRS]]';
   };
   function renownTier(v) { return v <= -50 ? '通緝' : v <= -15 ? '惡名' : v < 15 ? '無名' : v < 50 ? '有名' : '聲名遠播'; }
@@ -1582,7 +1605,7 @@ G.MREngine = { createEngine: createEngine };
 /* 末日求生者 求生日誌 介面 v1.0 */
 (function () {
 'use strict';
-var VER = '1.2.0';
+var VER = '1.2.1';
 var KS = LTStore.create('mori', {});
 var E = MREngine.createEngine(MR_DATA);
 var EMB = window.parent !== window;
