@@ -1125,8 +1125,13 @@ function createEngine(DATA, opt) {
   /* 以物易物：從身上挑價值最低、沒在用的東西湊到價錢 */
   E.autoBarter = function (W, C, price, exclude) {
     var cur = E.currency(W), list = [];
-    C.inv.forEach(function (s) { if (s.id === C.equip.weapon || s.id === C.equip.armor || s.id === cur || s.id === exclude) return; var it = ITEMS.get(s.id); if (!it || it.rarity === 'unique') return; for (var k = 0; k < s.n; k++) list.push(s.id); });
-    list.sort(function (a, b) { return E.itemValue(a) - E.itemValue(b); });
+    var ew = C.equip.weapon && ITEMS.get(C.equip.weapon), ammo = {};
+    C.inv.forEach(function (s) { var w = ITEMS.get(s.id); if (w && w.weapon && w.weapon.ammo) ammo[w.weapon.ammo] = 1; });
+    if (ew && ew.weapon && ew.weapon.ammo) ammo[ew.weapon.ammo] = 1;
+    C.inv.forEach(function (s) { if (s.id === C.equip.weapon || s.id === C.equip.armor || s.id === cur || s.id === exclude || ammo[s.id]) return; var it = ITEMS.get(s.id); if (!it || it.rarity === 'unique') return; for (var k = 0; k < s.n; k++) list.push(s.id); });
+    /* 先拿材料、雜物，再拿多餘的武器工具，吃的喝的藥最後才動 */
+    var RANK = { material: 0, special: 1, tool: 2, weapon: 3, armor: 3, ammo: 4, food: 5, water: 6, med: 6 };
+    list.sort(function (a, b) { var ia = ITEMS.get(a), ib = ITEMS.get(b); return (RANK[ia.cat] || 0) - (RANK[ib.cat] || 0) || E.itemValue(a) - E.itemValue(b); });
     var pay = {}, sum = 0;
     for (var i = 0; i < list.length && sum < price; i++) { pay[list[i]] = (pay[list[i]] || 0) + 1; sum += Math.max(1, Math.floor(E.itemValue(list[i]) * 0.7)); }
     if (sum < price) return null;
@@ -1234,6 +1239,8 @@ function createEngine(DATA, opt) {
     var mc = t.match(/(製作|做|製造|打造|縫|煮|烤|搭|組裝|削)/);
     if (mc && !neg(/(製作|做|製造|打造|縫|煮|烤|搭|組裝|削)/)) {
       var rs = E.recipesFor(W, C), rc = longestHit(t, rs, function (x) { return x.recipe.name; }) || longestHit(t, rs, function (x) { return E.itemName(x.recipe.out[0]); });
+      /* 「把生肉烤了」：動詞和做法名稱有同一個字、材料名稱出現在句子裡 */
+      if (!rc) rc = rs.filter(function (x) { return x.recipe.name.indexOf(mc[1].slice(-1)) >= 0 && x.recipe.in.some(function (y) { return t.indexOf(E.itemName(y[0])) >= 0; }); })[0];
       if (rc) return { kind: 'craft', id: rc.recipe.id };
     }
     /* 移動 */
@@ -1728,7 +1735,8 @@ function createEngine(DATA, opt) {
         if (!rc) out.warn.push('沒有「' + (ev.item || ev.name || '?') + '」的做法，這個動作沒有效果');
         else { var cr = E.craft(W, C, rc.recipe.id); if (cr.error) out.warn.push('做不出' + rc.recipe.name + '：' + cr.error); else { out.lines = out.lines.concat(cr.lines); if (cr.death) out.death = cr.death; if (cr.event) out.event = cr.event; } }
       }
-      else if (tp === 'trade') { out.trade = { name: ev.name || '', give: (ev.give || []).slice(0, 4), get: (ev.get || []).slice(0, 3) }; }
+      else if (tp === 'trade' && opt && opt.skipTrade) { /* 日誌回合已經結算過交易 */ }
+      else if (tp === 'trade') { var pl = function (l) { return (l || []).map(function (x) { if (Array.isArray(x)) return x; var m = String(x).match(/^(.+?)\s*[×xX*]\s*(\d+)$/); return m ? [m[1], +m[2]] : [String(x), 1]; }); }; out.trade = { name: ev.name || '', give: pl(ev.give).slice(0, 4), get: pl(ev.get).slice(0, 3) }; }
     });
     delete out._uses; delete out._water; delete out._craft; delete out._rest; delete out._shop;
     if (C.needs.health <= 0 && !out.death) out.death = 'health';
@@ -1862,7 +1870,7 @@ G.MREngine = { createEngine: createEngine };
 /* 末日求生者 求生日誌 介面 v1.0 */
 (function () {
 'use strict';
-var VER = '1.3.0';
+var VER = '1.3.1';
 var KS = LTStore.create('mori', {});
 var E = MREngine.createEngine(MR_DATA);
 var EMB = window.parent !== window;
@@ -1908,7 +1916,7 @@ function hint() { post({ t: 'hint', s: !W || !C ? '建立角色' : '第' + E.day
 function armText() { var sb = E.stateBlock(W, C); if (W.pending.length) sb = sb.replace('[[MRS]]', '[[MRS]]' + W.pending.join('\n') + '\n'); return '\n' + sb; }
 function arm() { if (W && C && C.alive) post({ t: 'arm', obj: armText(), tail: '' }); else post({ t: 'arm', off: true }); hint(); }
 function sendToAI(text, shown) {
-  if (W) W.panelTurn = true; /* 日誌組的訊息含 [[MRS]]，不會觸發 consumed */
+  if (W) { W.panelTurn = true; W.panelTrade = /^【(交易|殺價)】/.test(text); } /* 日誌組的訊息含 [[MRS]]，不會觸發 consumed */
   lastSent = text; save();
   storyPush(shown ? { k: 'me', t: shown } : { k: 'me', t: text.split('\n')[0], sys: true });
   if (EMB) { post({ t: 'fill', text: text, send: true, keep: true }); busy = true; if (innerWidth < 760 && view === 'game') tab = 'story'; render(); }
@@ -1918,7 +1926,7 @@ function onHost(e) {
   var d = e.data; if (!d || d.lt !== 1) return;
   if (d.t === 'busy') { busy = !!d.on; render(); }
   else if (d.t === 'fillres') { if (d.s && d.s.indexOf('已送出') < 0) toast(d.s); }
-  else if (d.t === 'consumed') { if (W) { W.panelTurn = false; W.pending = []; save(); arm(); } }
+  else if (d.t === 'consumed') { if (W) { W.panelTurn = false; W.panelTrade = false; W.pending = []; save(); arm(); } }
   else if (d.t === 'conv') onConv(d.id, d.u);
   else if (d.t === 'events') onEvents(d.id, d.text);
   else if (d.t === 'story') onStory(d);
@@ -2090,7 +2098,7 @@ function onEvents(id, text) {
   var obj = E.parseBlock(text);
   if (!W || !C || !C.alive) { post({ t: 'ingested', id: id, status: 'nosave' }); return; }
   if (!obj) { post({ t: 'ingested', id: id, status: 'ok', msg: '區塊格式無法解析' }); return; }
-  var r = E.ingest(W, C, M, obj, { noTime: !!W.panelTurn }), msgs = [];
+  var r = E.ingest(W, C, M, obj, { noTime: !!W.panelTurn, skipTrade: !!(W.panelTurn && W.panelTrade) }), msgs = [];
   if (r.lines.length) msgs.push(r.lines.join('、'));
   r.warn.forEach(function (w) { W.pending.push('（日誌提醒：' + w + '）'); });
   if (r.warn.length) toast('⚠ 日誌沒採用：' + r.warn[0] + (r.warn.length > 1 ? '（等 ' + r.warn.length + ' 項）' : ''));
