@@ -1093,8 +1093,11 @@ function createEngine(DATA, opt) {
     var p = PACK[W.bg];
     var f = p.factions.filter(function (x) { return x.home === C.location && x.attitude !== 'hostile'; })[0];
     if (f) { var a = f.anchors.filter(function (x) { return /商|掌櫃|會長|負責人|輪機|長者/.test(x.role); })[0] || f.anchors[0]; return { name: f.name, npc: a ? a.name : f.name, faction: f.id }; }
-    var here = Object.keys(W.npcs).map(function (k) { return W.npcs[k]; }).filter(function (x) { return x.met && x.alive !== false && (x.where === C.location || x.companion) && x.aff >= 41; })[0];
-    return here ? { name: here.name, npc: here.name } : null;
+    var here = Object.keys(W.npcs).map(function (k) { return W.npcs[k]; }).filter(function (x) { return x.met && x.alive !== false && (x.where === C.location || x.companion) && x.aff >= 21; }).sort(function (a, b) { return b.aff - a.aff; })[0];
+    if (here) return { name: here.name, npc: here.name };
+    /* 劇情裡剛出現願意交易的人（AI 的上一則回覆提到買賣） */
+    var st = W.storyTrader; if (st && st.loc === C.location && W.t - st.t <= 90) return { name: st.npc, npc: st.npc, story: true };
+    return null;
   };
   E.priceMod = function (W, C, npcName) {
     var e = E.eff(C), m = e.priceMult || 1, x = npcName && W.npcs[npcName];
@@ -1117,10 +1120,12 @@ function createEngine(DATA, opt) {
     }
     return W.shop;
   };
+  /* 架上沒有的東西也能買（劇情裡對方拿得出來），但比較貴：一般 1.3 倍、稀有 1.6 倍 */
+  E.canOrder = function (W, id) { var it = ITEMS.get(id); return !!it && E.itemAvail(id, W.bg) && it.rarity !== 'unique' && id !== E.currency(W); };
   E.quote = function (W, C, id, npcName) {
-    var sh = E.stock(W, C), v = E.itemValue(id), m = E.priceMod(W, C, npcName), hg = sh.haggle[id];
-    var disc = typeof hg === 'number' ? hg : 0;
-    return { buy: Math.max(1, Math.ceil(v * m * (1 - disc))), sell: Math.max(1, Math.floor(v * 0.5 / m)), disc: disc };
+    var sh = E.stock(W, C), v = E.itemValue(id), m = E.priceMod(W, C, npcName), hg = sh.haggle[id], it = ITEMS.get(id);
+    var disc = typeof hg === 'number' ? hg : 0, off = sh.items[id] ? 1 : it && it.rarity === 'rare' ? 1.6 : 1.3;
+    return { buy: Math.max(1, Math.ceil(v * m * off * (1 - disc))), sell: Math.max(1, Math.floor(v * 0.5 / m)), disc: disc, off: off > 1 };
   };
   /* 以物易物：從身上挑價值最低、沒在用的東西湊到價錢 */
   E.autoBarter = function (W, C, price, exclude) {
@@ -1128,7 +1133,7 @@ function createEngine(DATA, opt) {
     var ew = C.equip.weapon && ITEMS.get(C.equip.weapon), ammo = {};
     C.inv.forEach(function (s) { var w = ITEMS.get(s.id); if (w && w.weapon && w.weapon.ammo) ammo[w.weapon.ammo] = 1; });
     if (ew && ew.weapon && ew.weapon.ammo) ammo[ew.weapon.ammo] = 1;
-    C.inv.forEach(function (s) { if (s.id === C.equip.weapon || s.id === C.equip.armor || s.id === cur || s.id === exclude || ammo[s.id]) return; var it = ITEMS.get(s.id); if (!it || it.rarity === 'unique') return; for (var k = 0; k < s.n; k++) list.push(s.id); });
+    C.inv.forEach(function (s) { if (s.id === C.equip.weapon || s.id === C.equip.armor || s.id === cur || ammo[s.id] || (Array.isArray(exclude) ? exclude.indexOf(s.id) >= 0 : s.id === exclude)) return; var it = ITEMS.get(s.id); if (!it || it.rarity === 'unique') return; for (var k = 0; k < s.n; k++) list.push(s.id); });
     /* 先拿材料、雜物，再拿多餘的武器工具，吃的喝的藥最後才動 */
     var RANK = { material: 0, special: 1, tool: 2, weapon: 3, armor: 3, ammo: 4, food: 5, water: 6, med: 6 };
     list.sort(function (a, b) { var ia = ITEMS.get(a), ib = ITEMS.get(b); return (RANK[ia.cat] || 0) - (RANK[ib.cat] || 0) || E.itemValue(a) - E.itemValue(b); });
@@ -1137,25 +1142,36 @@ function createEngine(DATA, opt) {
     if (sum < price) return null;
     return { items: Object.keys(pay).map(function (k) { return [k, pay[k]]; }), value: sum };
   };
-  E.buy = function (W, C, id, qty, barter) {
-    var spot = E.tradeSpot(W, C), it = ITEMS.get(id), res = { lines: [], header: '【交易】' + (spot ? spot.npc : '') };
+  E.buy = function (W, C, id, qty, barter) { return E.buyMany(W, C, [[id, qty || 1]], barter); };
+  /* 一次買好幾樣：list = [[id, 數量], ...]，合併付款 */
+  E.priceList = function (W, C, list) {
+    var spot = E.tradeSpot(W, C), sh = E.stock(W, C), out = [], miss = [], total = 0;
+    list.forEach(function (x) {
+      var id = x[0], it = ITEMS.get(id), n = Math.max(1, Math.round(x[1] || 1));
+      if (!it || (!sh.items[id] && !E.canOrder(W, id))) { miss.push(it ? it.name : String(id)); return; }
+      n = Math.min(n, sh.items[id] || 5);
+      var q = E.quote(W, C, id, spot && spot.npc); out.push({ id: id, n: n, unit: q.buy, disc: q.disc, off: q.off }); total += q.buy * n;
+    });
+    return { spot: spot, items: out, miss: miss, total: total };
+  };
+  E.buyMany = function (W, C, list, barter) {
+    var pl = E.priceList(W, C, list), spot = pl.spot, res = { lines: [], header: '【交易】' + (spot ? spot.npc : '') };
     if (!spot) { res.error = '這裡沒有可以交易的人'; return res; }
-    var sh = E.stock(W, C); qty = Math.max(1, qty || 1);
-    if (!it || !sh.items[id]) { res.error = '這裡沒有賣' + (it ? it.name : '這個'); return res; }
-    if (sh.items[id] < qty) qty = sh.items[id];
-    var q = E.quote(W, C, id, spot.npc), total = q.buy * qty, cur = E.currency(W);
+    if (!pl.items.length) { res.error = (pl.miss.length ? pl.miss.join('、') + '在這個世界買不到' : '沒有要買的東西'); return res; }
+    var sh = E.stock(W, C), cur = E.currency(W), what = pl.items.map(function (x) { return E.itemName(x.id) + '×' + x.n; }).join('、');
     if (cur) {
-      if (invCount(C, cur) < total) { res.error = E.itemName(cur) + '不夠（要 ' + total + '，身上 ' + invCount(C, cur) + '）'; return res; }
-      invRemove(C, cur, total); res.lines.push('買了 ' + it.name + '×' + qty + '，付 ' + E.itemName(cur) + '×' + total + '（單價 ' + q.buy + (q.disc ? '，殺價後' : '') + '）');
+      if (invCount(C, cur) < pl.total) { res.error = E.itemName(cur) + '不夠（' + what + ' 要 ' + pl.total + '，身上 ' + invCount(C, cur) + '）'; return res; }
+      invRemove(C, cur, pl.total);
+      res.lines.push('買了 ' + pl.items.map(function (x) { return E.itemName(x.id) + '×' + x.n + '（單價 ' + x.unit + (x.disc ? '，殺價後' : x.off ? '，架上沒有、特別調貨' : '') + '）'; }).join('、') + '，共付 ' + E.itemName(cur) + '×' + pl.total);
     } else {
-      var b = barter || E.autoBarter(W, C, total, id);
-      if (!b) { res.error = '身上沒有足夠的東西可以換（' + it.name + '×' + qty + ' 約值 ' + total + '）'; return res; }
+      var b = barter || E.autoBarter(W, C, pl.total, pl.items.map(function (x) { return x.id; }));
+      if (!b) { res.error = '身上沒有足夠的東西可以換（' + what + ' 約值 ' + pl.total + '）'; return res; }
       b.items.forEach(function (x) { invRemove(C, x[0], x[1]); });
-      res.lines.push('用 ' + b.items.map(function (x) { return E.itemName(x[0]) + '×' + x[1]; }).join('、') + ' 換到 ' + it.name + '×' + qty);
+      res.lines.push('用 ' + b.items.map(function (x) { return E.itemName(x[0]) + '×' + x[1]; }).join('、') + ' 換到 ' + what);
     }
-    invAdd(C, id, qty, W.t); sh.items[id] -= qty; if (sh.items[id] <= 0) delete sh.items[id];
+    pl.items.forEach(function (x) { invAdd(C, x.id, x.n, W.t); if (sh.items[x.id]) { sh.items[x.id] -= x.n; if (sh.items[x.id] <= 0) delete sh.items[x.id]; } W.lastQuote = x.id; });
+    if (pl.miss.length) res.lines.push('沒買到：' + pl.miss.join('、') + '（這個世界沒有）');
     gainXp(C, 'trade', res.lines); E.tick(W, C, 10, { noEvent: true });
-    W.lastQuote = id;
     return res;
   };
   E.sell = function (W, C, id, qty) {
@@ -1174,7 +1190,7 @@ function createEngine(DATA, opt) {
   E.haggle = function (W, C, id) {
     var spot = E.tradeSpot(W, C), it = ITEMS.get(id), res = { lines: [], header: '【殺價】' + (spot ? spot.npc : '') };
     if (!spot) { res.error = '這裡沒有可以交易的人'; return res; }
-    var sh = E.stock(W, C); if (!it || !sh.items[id]) { res.error = '這裡沒有賣' + (it ? it.name : '這個'); return res; }
+    var sh = E.stock(W, C); if (!it || (!sh.items[id] && !E.canOrder(W, id))) { res.error = '這個世界買不到' + (it ? it.name : '這個'); return res; }
     if (sh.haggle[id] != null) { res.error = '今天已經為' + it.name + '殺過價了'; return res; }
     var before = E.quote(W, C, id, spot.npc).buy, x = W.npcs[spot.npc], roll = d100();
     var score = roll + E.skill(C, 'trade') * 5 + E.skill(C, 'persuade') * 3 + (x ? (x.aff - 50) / 5 : 0) - E.penalty(C) / 2;
@@ -1197,6 +1213,28 @@ function createEngine(DATA, opt) {
   var CN_NUM = { 一: 1, 兩: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 半: 0.5 };
   function numIn(t) { var m = t.match(/(\d+)/); if (m) return +m[1]; m = t.match(/([一兩二三四五六七八九十半])\s*(個|小時|鐘頭|份|瓶|罐|件|包|條|塊|顆|支|發|枚|把)/); return m ? CN_NUM[m[1]] : 0; }
   function longestHit(text, list, nameOf) { var best = null, bl = 0; list.forEach(function (x) { var n = nameOf(x); if (n && n.length > bl && text.indexOf(n) >= 0) { best = x; bl = n.length; } }); return best; }
+  /* 句子裡提到的所有物品（可買的），每樣配上前面最近的數量：「兩瓶水和三個罐頭」 */
+  function allHits(t, W) {
+    var cands = []; ITEMS.forEach(function (i) { if (E.canOrder(W, i.id)) cands.push(i); });
+    cands.sort(function (a, b) { return b.name.length - a.name.length; });
+    var used = [], out = [];
+    cands.forEach(function (it) {
+      var at = t.indexOf(it.name);
+      while (at >= 0) {
+        var clash = used.some(function (u) { return at < u[1] && at + it.name.length > u[0]; });
+        if (!clash) {
+          used.push([at, at + it.name.length]);
+          var prev = t.slice(Math.max(0, at - 6), at).split(/[、，,和跟與及還有再]/).pop();
+          var n = numIn(prev) || 1;
+          var ex = out.filter(function (o) { return o[0] === it.id; })[0];
+          if (ex) ex[1] += n; else out.push([it.id, Math.max(1, Math.min(20, Math.round(n))), at]);
+          break;
+        }
+        at = t.indexOf(it.name, at + 1);
+      }
+    });
+    return out.sort(function (a, b) { return a[2] - b[2]; }).map(function (o) { return [o[0], o[1]]; });
+  }
   var NEG_RX = /(不要|別|不想|不能|沒辦法|不打算|先不|假裝|如果|要不要|該不該|能不能|可不可以|嗎[？?]?$)/;
   E.parseIntent = function (W, C, text) {
     var t = String(text || '').replace(/\s+/g, ''); if (!t || t.length > 60) return null;
@@ -1213,9 +1251,9 @@ function createEngine(DATA, opt) {
     var mb = t.match(/(買|購買|購入|跟.{0,6}換|換一?[個些點])/);
     if (mb && !neg(/(買|購買|購入|跟.{0,6}換|換一?[個些點])/) && !/賣/.test(t.slice(0, mb.index))) {
       var bs = E.tradeSpot(W, C); if (!bs) return { kind: 'none', why: '這裡沒有可以交易的人' };
-      var stock = Object.keys(E.stock(W, C).items).map(function (id) { return ITEMS.get(id); });
-      var bi = longestHit(t.slice(mb.index), stock, function (i) { return i.name; });
-      return bi ? { kind: 'buy', id: bi.id, n: Math.max(1, Math.min(9, Math.round(numIn(t.slice(mb.index)) || 1))) } : { kind: 'shop' };
+      var bl = allHits(t.slice(mb.index), W);
+      if (!bl.length) return { kind: 'shop' };
+      return bl.length === 1 ? { kind: 'buy', id: bl[0][0], n: bl[0][1] } : { kind: 'buy', list: bl };
     }
     var ms = t.match(/(賣掉?|出售|脫手)/);
     if (ms && !neg(/(賣掉?|出售|脫手)/)) {
@@ -1269,7 +1307,7 @@ function createEngine(DATA, opt) {
     if (!it) return null;
     if (it.kind === 'none') return { error: it.why };
     if (it.kind === 'shop') return { shop: true };
-    if (it.kind === 'buy') return E.buy(W, C, it.id, it.n);
+    if (it.kind === 'buy') return it.list ? E.buyMany(W, C, it.list) : E.buy(W, C, it.id, it.n);
     if (it.kind === 'sell') return E.sell(W, C, it.id, it.n);
     if (it.kind === 'haggle') return E.haggle(W, C, it.id);
     if (it.kind === 'use') return E.useItem(W, C, it.id);
@@ -1815,7 +1853,7 @@ function createEngine(DATA, opt) {
     var tsp = E.tradeSpot(W, C);
     if (tsp) { var shp = E.stock(W, C), cu = E.currency(W); lines.push('可交易：' + tsp.npc + '｜今天的貨：' + Object.keys(shp.items).map(function (id) { return ITEMS.get(id).name + '(' + E.quote(W, C, id, tsp.npc).buy + ')'; }).join('、') + '｜' + (cu ? '玩家有' + ITEMS.get(cu).name + ' ' + invCount(C, cu) : '以物易物，括號是約值')); }
     else lines.push('可交易：這裡沒有（買賣只能在可交易的地方）');
-    lines.push('提醒：敵人撲來或玩家動手→正文停在交手前、輸出 encounter；玩家吃喝或用身上的物品→use，取水裝水→water，動手做東西→craft，睡覺→sleep，休息→rest，買→buy，賣→sell。數值和錢一律交給日誌，身上沒有的東西不能用，沒付錢不能拿貨。按鈕用動詞開頭：休息一小時／睡到天亮／探索這裡／前往某地／吃某物／買某物／殺價。');
+    lines.push('提醒：敵人撲來或玩家動手→正文停在交手前、輸出 encounter；玩家吃喝或用身上的物品→use，取水裝水→water，動手做東西→craft，睡覺→sleep，休息→rest，買→buy，賣→sell。數值和錢一律交給日誌，身上沒有的東西不能用，沒付錢不能拿貨；選項裡不要出現使用「身上」沒有的物品，劇情裡有人給東西要輸出 gain。按鈕用動詞開頭：休息一小時／睡到天亮／探索這裡／前往某地／吃某物／買某物／殺價。');
     return '[[MRS]]' + lines.join('\n') + '[[/MRS]]';
   };
   function renownTier(v) { return v <= -50 ? '通緝' : v <= -15 ? '惡名' : v < 15 ? '無名' : v < 50 ? '有名' : '聲名遠播'; }
@@ -1870,7 +1908,7 @@ G.MREngine = { createEngine: createEngine };
 /* 末日求生者 求生日誌 介面 v1.0 */
 (function () {
 'use strict';
-var VER = '1.3.1';
+var VER = '1.3.2';
 var KS = LTStore.create('mori', {});
 var E = MREngine.createEngine(MR_DATA);
 var EMB = window.parent !== window;
@@ -1967,8 +2005,16 @@ function onStory(d) {
 }
 /* 依 AI 時空列的地點對齊面板位置：相鄰就跟著移動，不相鄰就提醒 AI 拉回 */
 var locSynced = {};
+var TRADE_RX = /(賣給你|跟我買|要買|想買|換給你|跟你換|拿.{0,6}來換|交易|開價|價錢|收購|籌碼|銀幣|做生意|貨架|攤子|商人|小販)/;
+function noteTrader(bl) {
+  var txt = bl.filter(function (b) { return b.k === 'p' || b.k === 'd'; }).map(function (b) { return b.t; }).join('\n');
+  if (!TRADE_RX.test(txt)) return;
+  var nm = Object.keys(W.npcs).filter(function (k) { return W.npcs[k].alive !== false && txt.indexOf(k) >= 0; })[0];
+  W.storyTrader = { npc: nm || '對方', loc: C.location, t: W.t }; save();
+}
 function syncLoc(bl, id) {
   if (!W || !C || !C.alive || locSynced[id]) return;
+  try { noteTrader(bl); } catch (e) {}
   var st = bl.filter(function (b) { return b.k === 'st'; })[0]; if (!st) return;
   var parts = String(st.t).split(/[｜|]/); if (parts.length < 3) return;
   var where = parts[2].trim(), p = E.pack(W.bg), cur = p._reg.get(C.location);
@@ -1996,7 +2042,7 @@ function sendFree(text) {
   if (it && it.kind !== 'none') {
     var why = E.INTENT_ACT[it.kind] && E.canAct(C);
     if (!why && C._lockUntil && W.t < C._lockUntil) why = '你還在恐慌中，先冷靜一下（休息或使用物品）';
-    if (it.kind === 'buy' && !E.currency(W)) { draft = ''; barterDialog(it.id, it.n, text); return; }
+    if (it.kind === 'buy' && !E.currency(W) && !why) { var be = barterDialog(it.list || [[it.id, it.n]], text); if (!be) { draft = ''; return; } why = be; }
     var res = why ? { error: why } : E.doIntent(W, C, it);
     if (res && !res.error) { draft = ''; res.player = text; runChain(res); return; }
     if (res && res.error) { toast(res.error); W.pending.push('（日誌：玩家想做的事沒有成功——' + res.error + '。請照這個結果寫，不要讓它成功。）'); }
@@ -2268,15 +2314,18 @@ function tradeDialog(tr) {
   showModal({ title: '🤝 ' + esc(tr.name || '對方') + '提出交易', body: '<p>你交出：<b>' + f(tr.give) + '</b></p><p>你得到：<b>' + f(tr.get) + '</b></p>', buttons: [['接受', function () { var r = E.doTrade(W, C, tr); if (r.error) { toast(r.error); return; } W.pending.push('【交易完成】' + r.lines.join('、')); closeModal(); save(); arm(); toast('交易完成'); }], ['拒絕', function () { W.pending.push('（玩家拒絕了' + (tr.name || '對方') + '的交易）'); closeModal(); save(); arm(); }]] });
 }
 
-function barterDialog(id, n, player) {
-  if (busy && EMB) { toast('AI 正在回覆，稍等一下'); return; }
-  var spot = E.tradeSpot(W, C); if (!spot) { toast('這裡沒有可以交易的人'); return; }
-  var sh = E.stock(W, C); if (!sh.items[id]) { toast('這裡沒有賣' + E.itemName(id)); return; }
-  n = Math.min(n || 1, sh.items[id]);
-  var price = E.quote(W, C, id, spot.npc).buy * n, b = E.autoBarter(W, C, price, id);
-  if (!b) { toast('身上沒有足夠的東西可以換（約值 ' + price + '）'); return; }
+/* 以物易物確認框；list = [[id, 數量]]。做不到時回傳原因（給呼叫端決定要不要照送給 AI） */
+function barterDialog(list, player) {
+  if (busy && EMB) return 'AI 正在回覆，稍等一下';
+  var pl = E.priceList(W, C, list);
+  if (!pl.spot) return '這裡沒有可以交易的人';
+  if (!pl.items.length) return (pl.miss.join('、') || '這個') + '在這個世界買不到';
+  var b = E.autoBarter(W, C, pl.total, pl.items.map(function (x) { return x.id; }));
+  if (!b) return '身上沒有足夠的東西可以換（約值 ' + pl.total + '）';
+  var what = pl.items.map(function (x) { return esc(E.itemName(x.id)) + '×' + x.n + (x.off ? '<small class="muted">（特別調貨）</small>' : ''); }).join('、');
   var f = b.items.map(function (x) { return esc(E.itemName(x[0])) + '×' + x[1]; }).join('、');
-  showModal({ title: '🔁 跟' + esc(spot.npc) + '以物易物', body: '<p>想換：<b>' + esc(E.itemName(id)) + '×' + n + '</b>（約值 ' + price + '）</p><p>日誌挑了身上最不值錢的東西來湊：<b>' + f + '</b></p><p class="muted">裝備中的武器防具不會被拿去換。不想給這些，可以先把要留的東西存進基地。</p>', buttons: [['成交', function () { closeModal(); act(function () { var r = E.buy(W, C, id, n, b); if (r && !r.error && player) r.player = player; return r; }); }], ['算了', closeModal]] });
+  showModal({ title: '🔁 跟' + esc(pl.spot.npc) + '以物易物', body: '<p>想換：<b>' + what + '</b>（約值 ' + pl.total + '）</p><p>日誌挑了身上最不值錢的東西來湊：<b>' + f + '</b></p><p class="muted">裝備中的武器防具和它用的彈藥不會被拿去換。不想給這些，可以先把要留的東西存進基地。</p>', buttons: [['成交', function () { closeModal(); act(function () { var r = E.buyMany(W, C, list, b); if (r && !r.error && player) r.player = player; return r; }); }], ['算了', closeModal]] });
+  return null;
 }
 
 /* ================= 點擊處理 ================= */
@@ -2311,7 +2360,7 @@ function onClick(e) {
   if (a === 'move') { mapSel = null; return act(function () { return E.move(W, C, v); }, true); }
   if (a === 'mapsel') { mapSel = v; render(); return; }
   if (a === 'use') return act(function () { return E.useItem(W, C, v); });
-  if (a === 'buy') { if (!E.currency(W)) { barterDialog(v, 1); return; } return act(function () { return E.buy(W, C, v, 1); }); }
+  if (a === 'buy') { var bv = v.split('|'), bn = +bv[1] || 1; if (!E.currency(W)) { var be2 = barterDialog([[bv[0], bn]]); if (be2) toast(be2); return; } return act(function () { return E.buy(W, C, bv[0], bn); }); }
   if (a === 'sell') return act(function () { return E.sell(W, C, v, 1); });
   if (a === 'haggle') return act(function () { return E.haggle(W, C, v); });
   if (a === 'equip') { var er = E.equip(C, v); if (er) toast(er); save(); render(); arm(); return; }
@@ -2446,8 +2495,8 @@ function tAct() {
     h += '<div class="card" id="shopcard"><h3>🤝 交易：' + esc(spot.npc) + '<span>' + (cur ? esc(E.itemName(cur)) + ' ' + E.invCount(C, cur) : '以物易物') + '</span></h3>';
     var ids = Object.keys(sh.items);
     if (!ids.length) h += '<p class="muted">今天的貨都賣光了。</p>';
-    ids.forEach(function (id) { var q = E.quote(W, C, id, spot.npc), hg = sh.haggle[id]; h += '<div class="row"><div class="grow"><div class="nm">' + esc(E.itemName(id)) + ' <span class="muted">×' + sh.items[id] + '</span></div><div class="ds">' + (cur ? '單價 ' + q.buy : '約值 ' + q.buy) + (typeof hg === 'number' ? ' <span class="chip good">殺價後</span>' : hg === 'fail' ? ' <span class="chip">殺價失敗</span>' : '') + '</div></div><button class="mini on" data-a="buy" data-v="' + id + '"' + dis + '>' + (cur ? '買' : '換') + '</button>' + (hg == null ? '<button class="mini" data-a="haggle" data-v="' + id + '"' + dis + '>殺價</button>' : '') + '</div>'; });
-    h += '<p class="muted">' + (cur ? '賣東西到「物品」頁按「賣」。' : '這個世界沒有通用貨幣，換東西時日誌會用你身上的物品湊價錢。') + '也可以直接打字：買○○、賣○○、殺價。</p></div>';
+    ids.forEach(function (id) { var q = E.quote(W, C, id, spot.npc), hg = sh.haggle[id]; h += '<div class="row"><div class="grow"><div class="nm">' + esc(E.itemName(id)) + ' <span class="muted">×' + sh.items[id] + '</span></div><div class="ds">' + (cur ? '單價 ' + q.buy : '約值 ' + q.buy) + (typeof hg === 'number' ? ' <span class="chip good">殺價後</span>' : hg === 'fail' ? ' <span class="chip">殺價失敗</span>' : '') + '</div></div><button class="mini on" data-a="buy" data-v="' + id + '"' + dis + '>' + (cur ? '買' : '換') + '</button>' + (sh.items[id] >= 2 ? '<button class="mini on" data-a="buy" data-v="' + id + '|' + Math.min(5, sh.items[id]) + '"' + dis + '>×' + Math.min(5, sh.items[id]) + '</button>' : '') + (hg == null ? '<button class="mini" data-a="haggle" data-v="' + id + '"' + dis + '>殺價</button>' : '') + '</div>'; });
+    h += '<p class="muted">' + (cur ? '賣東西到「物品」頁按「賣」。' : '這個世界沒有通用貨幣，換東西時日誌會用你身上的物品湊價錢。') + '也可以直接打字：買兩個○○和三個○○、賣○○、殺價；架上沒有的東西也能問，價格比較高。</p></div>';
   }
   var rs = E.recipesFor(W, C).sort(function (a, b) { return a.miss.length - b.miss.length; });
   h += '<div class="card"><h3>🔨 製作</h3>';
